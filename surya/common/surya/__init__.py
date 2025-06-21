@@ -354,7 +354,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             use_cache=use_cache,
             cache_idxs=cache_idxs,
             valid_tokens=valid_tokens,
-            prefill=prefill
+            prefill=prefill,
             **kwargs,
         )
 

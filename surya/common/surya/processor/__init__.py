@@ -56,6 +56,8 @@ class SuryaOCRProcessor(S3DownloaderMixin, ProcessorMixin):
         num_register_tokens: int,
         patch_size: int,
         merge_size: int,
+        num_beacon_tokens: int,
+        beacon_token_interval: int,
         model_device: str,
         **kwargs,
     ):
@@ -63,6 +65,8 @@ class SuryaOCRProcessor(S3DownloaderMixin, ProcessorMixin):
         self.patch_size = patch_size
         self.merge_size = merge_size
         self.num_register_tokens = num_register_tokens
+        self.num_beacon_tokens = num_beacon_tokens
+        self.beacon_token_interval = beacon_token_interval
 
         self.tokenizer_vocab_size = 0
         for attr in self.attributes:
@@ -77,6 +81,7 @@ class SuryaOCRProcessor(S3DownloaderMixin, ProcessorMixin):
         self.register_token_ids = [
             self.special_token_mapping.get(r) for r in REGISTER_TOKENS
         ]
+        self.beacon_token_id = self.special_token_mapping.get(BEACON_TOKEN)
         self.image_token_id = self.special_token_mapping.get(IMAGE_TOKEN)
         self.pad_token_id = self.special_token_mapping.get(PAD_TOKEN)
         self.eos_token_id = self.special_token_mapping.get(EOS_TOKEN)
