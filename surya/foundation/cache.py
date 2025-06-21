@@ -112,7 +112,7 @@ class ContinuousBatchingCache(StaticCache):
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        cache_idxs: List[int] = cache_kwargs.get("cache_idx", None)
+        cache_idxs: List[int] = cache_kwargs.get("cache_idxs", None)
         assert cache_idxs is not None, "cache_idxs must be specified during prefill"
 
         # key and value states will already be left padded during prefill
@@ -145,7 +145,7 @@ class ContinuousBatchingCache(StaticCache):
         assert valid_tokens is not None, "`valid_tokens` must be provided in `cache_kwargs`"
 
         # Update only selected batch indices, useful for prefill in continuous batching
-        cache_idxs: List[int] = cache_kwargs.get("cache_idx", None)
+        cache_idxs: List[int] = cache_kwargs.get("cache_idxs", None)
         if cache_idxs is None:
             cache_idxs = list(range(self.batch_size))
 

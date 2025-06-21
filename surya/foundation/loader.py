@@ -73,9 +73,8 @@ class FoundationModelLoader(ModelLoader):
             patch_size=config.vision_encoder.patch_size,
             merge_size=config.vision_encoder.spatial_merge_size,
             model_device=device,
+            num_beacon_tokens=config.num_beacon_tokens,
+            beacon_token_interval=config.beacon_token_interval
         )
-        config.eos_token_id = processor.eos_token_id
-        config.pad_token_id = processor.pad_token_id
-        config.bos_token_id = processor.bos_token_id
 
         return processor

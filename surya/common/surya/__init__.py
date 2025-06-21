@@ -310,7 +310,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         # Skipped during decoding since not required
         if (
             self.decoder.config._attn_implementation == "flash_attention_2"
-            and inputs_embeds.shape[1] != 1
+            and prefill
         ):
             batch_size, query_length, _ = inputs_embeds.shape
             indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(
