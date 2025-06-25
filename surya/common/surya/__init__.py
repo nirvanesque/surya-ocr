@@ -55,6 +55,24 @@ class FlashAttentionKwargs(TypedDict, total=False):
 
 class KwargsForCausalLM(FlashAttentionKwargs): ...
 
+class DistanceProjection(nn.Module):
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.fc1 = nn.Linear(in_features, out_features)
+        self.act = nn.SiLU()
+        self.fc2 = nn.Linear(out_features, out_features)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.fc2(x)
+        return x
+
+    def init_weights(self):
+        nn.init.xavier_uniform_(self.fc1.weight)
+        nn.init.xavier_uniform_(self.fc2.weight)
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.zeros_(self.fc2.bias)
 
 class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     config_class = SuryaModelConfig
@@ -110,11 +128,17 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         self.bbox_head = nn.Linear(config.hidden_size, 6)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size)
 
-        if self.config.multi_output_distance is not None and self.config.multi_output_distance > 0:
-            self.multi_output_embeds = nn.Embedding(
-                config.max_multi_out,
-                config.hidden_size,
-                padding_idx=0,
+        if (
+            self.config.multi_output_distance is not None
+            and self.config.multi_output_distance > 0
+        ):
+            self.multi_output_projections = nn.ModuleList(
+                [
+                    DistanceProjection(
+                        in_features=config.hidden_size, out_features=config.hidden_size
+                    )
+                    for _ in range(self.config.multi_output_distance)
+                ]
             )
 
     def tie_weights(self):
