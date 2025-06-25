@@ -251,7 +251,7 @@ class FoundationPredictor(BasePredictor):
         valid_tokens = current_inputs.valid_tokens
 
         # TODO Setup for multi token generation
-        valid_tokens = [1] * self.kv_cache.batch_size
+        valid_tokens = [1] * self.kv_cache.max_batch_size
         # Pre-shift the attention mask based on the cache update
         self.kv_cache.maybe_shift_attention_mask(
             valid_tokens=valid_tokens,
@@ -386,7 +386,7 @@ class FoundationPredictor(BasePredictor):
                 input_ids=processed_outputs.input_ids,
                 position_ids=position_ids,
                 valid_tokens=valid_tokens,
-                num_predicted_tokens=torch.ones((self.kv_cache.batch_size, 1), device=self.model.device)
+                num_predicted_tokens=torch.ones((self.kv_cache.max_batch_size, 1), device=self.model.device)
             )
 
             return (
