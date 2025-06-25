@@ -182,9 +182,11 @@ class FoundationPredictor(BasePredictor):
         
         token_indices = valid_tokens - 1  # shape: [B]
         token_indices = token_indices.view(-1, 1, 1).expand(-1, 1, lm_logits.size(-1))  # shape: [B, 1, V]
+        token_indices = token_indices.to(torch.int64)       # gather expects int64 for index
 
         bbox_indices = valid_tokens - 1
         bbox_indices = bbox_indices.view(-1, 1, 1).expand(-1, 1, bbox_logits.size(-1))  # shape: [B, 1, D]
+        bbox_indices = bbox_indices.to(torch.int64)         # gather expects int64 for index
 
         # Gather logits at valid token positions
         next_token_logits = torch.gather(lm_logits, dim=1, index=token_indices)  # shape: [B, 1, V]
@@ -227,7 +229,7 @@ class FoundationPredictor(BasePredictor):
         batch_size = input_ids.shape[0]
 
         token = input_ids.squeeze(1)  # shape: [batch_size]
-        add_beacon = (num_predicted_tokens % self.beacon_token_interval== 0)
+        add_beacon = (num_predicted_tokens % self.beacon_token_interval== 0).squeeze()
         
         # Output tensors
         new_input_ids = torch.full((batch_size, 2), self.device_pad_token, dtype=input_ids.dtype, device=input_ids.device)
@@ -251,7 +253,7 @@ class FoundationPredictor(BasePredictor):
         valid_tokens = current_inputs.valid_tokens
 
         # TODO Setup for multi token generation
-        valid_tokens = [1] * self.kv_cache.max_batch_size
+        valid_tokens = torch.ones((self.kv_cache.max_batch_size, 1), dtype=torch.long, device=input_ids.device)
         # Pre-shift the attention mask based on the cache update
         self.kv_cache.maybe_shift_attention_mask(
             valid_tokens=valid_tokens,
@@ -275,7 +277,7 @@ class FoundationPredictor(BasePredictor):
         num_predicted_tokens += 1
         input_ids, valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
         # TODO we should only consider position_ids upto the valid range for each batch element
-        position_ids = position_ids[:, -1:] + torch.arange(1, input_ids.shape[1] + 1)
+        position_ids = position_ids[:, -1:] + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
 
         new_input = ContinuousBatchInput(
             input_ids=input_ids,
@@ -382,6 +384,8 @@ class FoundationPredictor(BasePredictor):
         self.kv_cache.update_text_counts(idxs_to_merge, text_lengths)
 
         if current_inputs is None:
+            # In this case, we only return 1 token, and position_ids should match that
+            position_ids = position_ids[:, -1:] + 1
             new_input = ContinuousBatchInput(
                 input_ids=processed_outputs.input_ids,
                 position_ids=position_ids,
@@ -447,6 +451,8 @@ class FoundationPredictor(BasePredictor):
 
         if batch_size is None:
             batch_size = self.get_batch_size()
+        
+        batch_size = min(len(images), batch_size)
         current_inputs = None
         
         max_image_tokens = max(self.get_image_token_count(image, task) for (image, task) in zip(images, task_names))

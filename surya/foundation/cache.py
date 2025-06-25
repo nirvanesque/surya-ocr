@@ -29,11 +29,14 @@ class ContinuousBatchingCache(StaticCache):
         self.text_sliding_window = text_sliding_window
         self.num_layers = config.num_hidden_layers
 
-        self.register_buffer(f"attention_mask", torch.zeros((self.batch_size, self.max_cache_len), device=device, dtype=torch.int))
-        self.text_token_counts = [torch.zeros(self.batch_size) for _ in range(self.num_layers)]
+        self.register_buffer(f"attention_mask", torch.zeros((self.max_batch_size, self.max_cache_len), device=device, dtype=torch.long))
+        self.text_token_counts = [torch.zeros(self.max_batch_size, dtype=torch.long, device=device) for _ in range(self.num_layers)]
+
+        self.dtype = dtype
+        self.device = device
 
     def _shift_attention_mask_left(self, batch_idx: int, shift_amount: int):
-        self.attention_mask[batch_idx, :-shift_amount] = self.attention_mask[batch_idx, shift_amount:]
+        self.attention_mask[batch_idx, :-shift_amount] = self.attention_mask[batch_idx, shift_amount:].clone()
         self.attention_mask[batch_idx, -shift_amount:] = 1
 
     def update(
@@ -65,8 +68,8 @@ class ContinuousBatchingCache(StaticCache):
         new_text_lens: List[int]
     ):
         assert len(cache_idxs) == len(new_text_lens)
-        new_text_len_tensor = torch.tensor(new_text_lens)
-        for layer_idx in self.num_layers:
+        new_text_len_tensor = torch.tensor(new_text_lens, dtype=torch.long, device=self.device)
+        for layer_idx in range(self.num_layers):
             self.text_token_counts[layer_idx][cache_idxs] = new_text_len_tensor
 
     """
@@ -79,7 +82,7 @@ class ContinuousBatchingCache(StaticCache):
         cache_idxs: Optional[List[int]] = None
     ):
         if cache_idxs is None:
-            cache_idxs = list(range(self.batch_size))
+            cache_idxs = list(range(self.max_batch_size))
 
         for batch_idx, cache_idx in enumerate(cache_idxs):
             new_text_len = valid_tokens[batch_idx]
@@ -120,7 +123,7 @@ class ContinuousBatchingCache(StaticCache):
         self.key_cache[layer_idx][cache_idxs] = key_states[:valid_batch_size]
         self.value_cache[layer_idx][cache_idxs] = value_states[:valid_batch_size]
 
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+        return self.key_cache[layer_idx][cache_idxs], self.value_cache[layer_idx][cache_idxs]
 
     def _decode_update(
         self,
@@ -147,7 +150,7 @@ class ContinuousBatchingCache(StaticCache):
         # Update only selected batch indices, useful for prefill in continuous batching
         cache_idxs: List[int] = cache_kwargs.get("cache_idxs", None)
         if cache_idxs is None:
-            cache_idxs = list(range(self.batch_size))
+            cache_idxs = list(range(self.max_batch_size))
 
         k_cache = self.key_cache[layer_idx]   # (B, H, L, D)
         v_cache = self.value_cache[layer_idx] # (B, H, L, D)
