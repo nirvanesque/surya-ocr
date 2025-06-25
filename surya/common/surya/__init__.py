@@ -383,7 +383,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         past_key_values: Cache,
         output_attentions: bool,
     ):
-        if self.config._attn_implementation == "flash_attention_2":
+        if self.decoder.config._attn_implementation == "flash_attention_2":
             return attention_mask
 
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
