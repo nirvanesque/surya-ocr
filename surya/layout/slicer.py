@@ -86,7 +86,7 @@ class ImageSlicer:
         to_remove_idxs = set()
         if merge_dir == "width":
             new_image_bbox[2] += res2.image_bbox[2]
-            max_position = max([box.position for box in res1.bboxes]) + 1
+            max_position = max([box.position for box in res1.bboxes], default=-1) + 1
             for i, box2 in enumerate(res2.bboxes):
                 box2.shift(x_shift=res1.image_bbox[2])
                 box2.position += max_position
