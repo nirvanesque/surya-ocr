@@ -320,7 +320,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         logits_to_keep=None,
         encoder_chunk_size=None,
         cache_idxs=None,
-        valid_tokens=None,
+        num_text_tokens=None,
         prefill=False,
         **kwargs: KwargsForCausalLM,
     ):
@@ -377,7 +377,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             return_dict=True,
             use_cache=use_cache,
             cache_idxs=cache_idxs,
-            valid_tokens=valid_tokens,
+            num_text_tokens=num_text_tokens,
             prefill=prefill,
             **kwargs,
         )

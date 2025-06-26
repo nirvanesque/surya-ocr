@@ -78,14 +78,14 @@ class ContinuousBatchingCache(StaticCache):
     """
     def maybe_shift_attention_mask(
         self,
-        valid_tokens: List[int] = None,
+        num_text_tokens: List[int] = None,
         cache_idxs: Optional[List[int]] = None
     ):
         if cache_idxs is None:
             cache_idxs = list(range(self.max_batch_size))
 
         for batch_idx, cache_idx in enumerate(cache_idxs):
-            new_text_len = valid_tokens[batch_idx]
+            new_text_len = num_text_tokens[batch_idx]
             if new_text_len == 0:
                 continue  # skip padded batch entry
 
@@ -140,12 +140,12 @@ class ContinuousBatchingCache(StaticCache):
 
         kv states are expected to have shape [batch_size, kv_heads, T_pad, head_dim]
         They may have different `true` lengths, to account for multi token preds, or beacon tokens
-        Expects `valid_tokens` in cache_kwargs: a tensor of shape (B,) indicating the number
+        Expects `num_text_tokens` in cache_kwargs: a tensor of shape (B,) indicating the number
         of actual (non-padded) tokens to add per batch element.
         """
 
-        valid_tokens: torch.Tensor = cache_kwargs.get("valid_tokens")  # shape: (B,)
-        assert valid_tokens is not None, "`valid_tokens` must be provided in `cache_kwargs`"
+        num_text_tokens: torch.Tensor = cache_kwargs.get("num_text_tokens")  # shape: (B,)
+        assert num_text_tokens is not None, "`num_text_tokens` must be provided in `cache_kwargs`"
 
         # Update only selected batch indices, useful for prefill in continuous batching
         cache_idxs: List[int] = cache_kwargs.get("cache_idxs", None)
@@ -156,7 +156,7 @@ class ContinuousBatchingCache(StaticCache):
         v_cache = self.value_cache[layer_idx] # (B, H, L, D)
 
         for batch_idx, cache_idx in enumerate(cache_idxs):
-            new_text_len = valid_tokens[batch_idx].item()
+            new_text_len = num_text_tokens[batch_idx].item()
             if new_text_len == 0:
                 continue  # skip padded batch entry
 
