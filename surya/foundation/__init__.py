@@ -316,7 +316,6 @@ class FoundationPredictor(BasePredictor):
         return padded_input_ids, updated_position_ids
 
     def prefill(self, current_inputs: Optional[ContinuousBatchInput] = None):
-        print('ONLY ONCE PLOX')
         logger.debug(f"Prefilling {self.num_empty_slots} slots")
         prompts: List[RecognitionPrompt] = [
             self.prompt_queue.popleft()
