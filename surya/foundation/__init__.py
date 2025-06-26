@@ -226,6 +226,8 @@ class FoundationPredictor(BasePredictor):
         input_ids: torch.Tensor,
         num_predicted_tokens: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return input_ids, torch.ones((input_ids.shape[0], 1), device=input_ids.device, dtype=torch.long)
+        raise NotImplementedError()
         batch_size = input_ids.shape[0]
 
         token = input_ids.squeeze(1)  # shape: [batch_size]
@@ -252,8 +254,6 @@ class FoundationPredictor(BasePredictor):
         num_predicted_tokens = current_inputs.num_predicted_tokens
         num_valid_tokens = current_inputs.num_valid_tokens
 
-        # TODO Setup for multi token generation
-        num_valid_tokens = torch.ones((self.kv_cache.max_batch_size, 1), dtype=torch.long, device=input_ids.device)
         # Pre-shift the attention mask based on the cache update
         self.kv_cache.maybe_shift_attention_mask(
             num_valid_tokens=num_valid_tokens,
@@ -316,6 +316,7 @@ class FoundationPredictor(BasePredictor):
         return padded_input_ids, updated_position_ids
 
     def prefill(self, current_inputs: Optional[ContinuousBatchInput] = None):
+        print('ONLY ONCE PLOX')
         logger.debug(f"Prefilling {self.num_empty_slots} slots")
         prompts: List[RecognitionPrompt] = [
             self.prompt_queue.popleft()
@@ -377,11 +378,12 @@ class FoundationPredictor(BasePredictor):
             )
         
         # Process outputs
-        num_valid_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device)    # No extra tokens during prefill
+        # No extra tokens during prefill
+        num_valid_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device, dtype=torch.long)
+        num_predicted_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device, dtype=torch.long)
         processed_outputs = self.process_outputs(outputs, num_valid_tokens=num_valid_tokens)
-        # Update to account for the newly generated tokens
-        self.kv_cache.attention_mask[idxs_to_merge] = attention_mask[:len(idxs_to_merge)]
 
+        self.kv_cache.prefill_attention_mask_update(attention_mask, idxs_to_merge, text_lengths)
         self.kv_cache.update_text_counts(idxs_to_merge, text_lengths)
 
         if current_inputs is None:
@@ -391,7 +393,7 @@ class FoundationPredictor(BasePredictor):
                 input_ids=processed_outputs.input_ids,
                 position_ids=position_ids,
                 num_valid_tokens=num_valid_tokens,
-                num_predicted_tokens=torch.ones((self.kv_cache.max_batch_size, 1), device=self.model.device)
+                num_predicted_tokens=num_predicted_tokens,
             )
 
             return (
@@ -414,7 +416,7 @@ class FoundationPredictor(BasePredictor):
         current_num_valid_tokens[idxs_to_merge] = num_valid_tokens
 
         current_num_predicted_tokens = current_inputs.num_predicted_tokens
-        current_num_predicted_tokens[idxs_to_merge] = torch.ones((len(idxs_to_merge), 1), device=self.model.device)
+        current_num_predicted_tokens[idxs_to_merge] = num_predicted_tokens
 
         new_input = ContinuousBatchInput(
             input_ids=current_input_ids,

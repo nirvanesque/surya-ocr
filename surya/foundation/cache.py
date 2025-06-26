@@ -49,9 +49,10 @@ class ContinuousBatchingCache(StaticCache):
         prefill = cache_kwargs.get('prefill', False)
         if prefill:
             return self._prefill_update(
+                self.key_cache[layer_idx],
+                self.value_cache[layer_idx],
                 key_states,
                 value_states,
-                layer_idx,
                 cache_kwargs
             )
         else:
@@ -108,22 +109,87 @@ class ContinuousBatchingCache(StaticCache):
                 if shift_amount > 0:        # Cannot be negative, may be exactly 0
                     self._shift_attention_mask_left(cache_idx, shift_amount)
                 
+    # Mirrors the logic from _prefill_update
+    def prefill_attention_mask_update(
+        self,
+        attention_mask: torch.Tensor,
+        cache_idxs: List[int],
+        text_lengths: List[int]
+    ):
+        seq_len = attention_mask.shape[1]
+        
+        for batch_idx, cache_idx in enumerate(cache_idxs):
+            text_len = text_lengths[batch_idx]
+            self.attention_mask[cache_idx] = 0  # Set default
+            
+            if text_len <= self.text_sliding_window:
+                # This is safe since the cache length is larger than the max image tokens + sliding_window
+                tokens_to_take = min(seq_len, self.max_cache_len)
+                self.attention_mask[cache_idx, -tokens_to_take:] = attention_mask[batch_idx, -tokens_to_take:]
+            else:
+                # Place the last sliding_window text tokens at the end of cache
+                cache_text_start = self.max_cache_len - self.text_sliding_window
+                self.attention_mask[cache_idx, cache_text_start:] = 1
+
+                # These include both image and padding tokens
+                non_text_tokens = seq_len - text_len
+                non_text_tokens_to_keep = min(non_text_tokens, self.max_cache_len - self.text_sliding_window)
+                
+                # Take the last image_tokens_to_keep image tokens
+                image_end_in_seq = seq_len - text_len
+
+                self.attention_mask[cache_idx, :cache_text_start - non_text_tokens_to_keep: cache_text_start] = (
+                    attention_mask[batch_idx, image_end_in_seq - non_text_tokens_to_keep: image_end_in_seq]
+                )
+
     def _prefill_update(
         self,
+        key_cache: torch.Tensor,
+        value_cache: torch.Tensor,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ):
         cache_idxs: List[int] = cache_kwargs.get("cache_idxs", None)
+        text_lengths: List[int] = cache_kwargs.get("text_lengths", None)
         assert cache_idxs is not None, "cache_idxs must be specified during prefill"
+        assert text_lengths is not None, "text_lengths must be specified during prefill"
 
-        # key and value states will already be left padded during prefill
-        valid_batch_size = len(cache_idxs)
-        self.key_cache[layer_idx][cache_idxs] = key_states[:valid_batch_size]
-        self.value_cache[layer_idx][cache_idxs] = value_states[:valid_batch_size]
+        # Get cache dimensions
+        seq_len = key_states.shape[2]
+        
+        for batch_idx, cache_idx in enumerate(cache_idxs):
+            text_len = text_lengths[batch_idx]
+            
+            if text_len <= self.text_sliding_window:
+                # This is safe since the cache length is larger than the max image tokens + sliding_window
+                tokens_to_take = min(seq_len, self.max_cache_len)
+                start_idx = seq_len - tokens_to_take
+                key_cache[cache_idx, :, -tokens_to_take:, :] = key_states[batch_idx, :, start_idx:, :]
+                value_cache[cache_idx, :, -tokens_to_take:, :] = value_states[batch_idx, :, start_idx:, :]
+            else:
+                # Place the last sliding_window text tokens at the end of cache
+                text_start_in_seq = seq_len - self.text_sliding_window
+                cache_text_start = self.max_cache_len - self.text_sliding_window
 
-        return self.key_cache[layer_idx][cache_idxs], self.value_cache[layer_idx][cache_idxs]
+                key_cache[cache_idx, :, cache_text_start:, :] = key_states[batch_idx, :, text_start_in_seq:, :]
+                value_cache[cache_idx, :, cache_text_start:, :] = value_states[batch_idx, :, text_start_in_seq:, :]
+
+                # These include both image and padding tokens
+                non_text_tokens = seq_len - text_len
+                non_text_tokens_to_keep = min(non_text_tokens, self.max_cache_len - self.text_sliding_window)
+                
+                # Take the last image_tokens_to_keep image tokens
+                image_end_in_seq = seq_len - text_len
+
+                key_cache[cache_idx, :, cache_text_start-non_text_tokens_to_keep:cache_text_start, :] = (
+                    key_states[batch_idx, :, image_end_in_seq-non_text_tokens_to_keep:image_end_in_seq, :]
+                )
+                value_cache[cache_idx, :, cache_text_start-non_text_tokens_to_keep:cache_text_start, :] = (
+                    value_states[batch_idx, :, image_end_in_seq-non_text_tokens_to_keep:image_end_in_seq, :]
+                )
+
+        return key_states, value_states
 
     def _decode_update(
         self,
@@ -134,7 +200,6 @@ class ContinuousBatchingCache(StaticCache):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Static cache update
-        - adjust attention mask with new left padding
         - respects per-batch text token limits
         - per-batch valid token lengths (right-padded inputs)
 
@@ -177,8 +242,6 @@ class ContinuousBatchingCache(StaticCache):
                 v_cache[cache_idx, :, -shift:, :] = v_new
 
                 self.text_token_counts[layer_idx][cache_idx] += new_text_len
-                if layer_idx == (self.num_layers - 1):
-                    self._shift_attention_mask_left(cache_idx, shift)
             else:
                 # Expand text region to exactly text_sliding_window tokens
                 # Shift entire cache left to make room for the full sliding window
