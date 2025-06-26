@@ -162,6 +162,7 @@ class Qwen2Attention(nn.Module):
         cache_position: Optional[torch.LongTensor] = None,
         cache_idxs: Optional[List[int]] = None,
         num_valid_tokens: Optional[List[int]] = None,
+        text_lengths: Optional[List[int]] = None,
         prefill: bool = False,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
@@ -194,7 +195,8 @@ class Qwen2Attention(nn.Module):
                 "cache_position": cache_position,
                 "cache_idxs": cache_idxs,
                 "num_valid_tokens": num_valid_tokens,
-                "prefill": prefill
+                "prefill": prefill,
+                "text_lengths": text_lengths
             }
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
@@ -290,6 +292,7 @@ class Qwen2DecoderLayer(nn.Module):
         cache_position: Optional[torch.LongTensor] = None,
         cache_idxs: Optional[List[int]] = None,
         num_valid_tokens: Optional[List[int]] = None,
+        text_lengths: Optional[List[int]] = None,
         prefill: bool = False,
         position_embeddings: Optional[
             Tuple[torch.Tensor, torch.Tensor]
@@ -314,6 +317,7 @@ class Qwen2DecoderLayer(nn.Module):
             position_embeddings=position_embeddings,
             cache_idxs=cache_idxs,
             num_valid_tokens=num_valid_tokens,
+            text_lengths=text_lengths,
             prefill=prefill,
             **kwargs,
         )
@@ -476,6 +480,7 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         cache_idxs: Optional[List[int]] = None,
         num_valid_tokens: Optional[List[int]] = None,
+        text_lengths: Optional[List[int]] = None,
         prefill: bool = False,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
@@ -519,6 +524,7 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
                 cache_idxs=cache_idxs,
                 num_valid_tokens=num_valid_tokens,
                 prefill=prefill,
+                text_lengths=text_lengths,
                 **flash_attn_kwargs,
             )
 

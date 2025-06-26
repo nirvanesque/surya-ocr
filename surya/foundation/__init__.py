@@ -346,6 +346,18 @@ class FoundationPredictor(BasePredictor):
         attention_mask = processed_inputs["attention_mask"].to(dtype=torch.long)
         position_ids = processed_inputs["position_ids"].to(dtype=torch.long)
 
+        # Find text lengths of each
+        is_special = (input_ids.unsqueeze(-1) == self.special_token_ids).any(-1)  # (batch, seq_len)
+        text_lengths = []
+        for i in range(input_ids.shape[0]):
+            special_positions = is_special[i].nonzero(as_tuple=True)[0]
+            if len(special_positions) > 0:
+                # Assuming special tokens are contiguous at the start
+                prefix_len = special_positions[-1].item() + 1
+            else:
+                prefix_len = 0
+            text_lengths.append(input_ids.shape[1] - prefix_len)
+
         with settings.INFERENCE_MODE():
             outputs = self.model(
                 input_ids=input_ids,
@@ -360,7 +372,8 @@ class FoundationPredictor(BasePredictor):
                 encoder_chunk_size=self.get_encoder_chunk_size(),
                 cache_idxs=idxs_to_merge,
                 prefill=True,
-                num_valid_tokens=None   # Not required during prefill
+                num_valid_tokens=None,   # Not required during prefill
+                text_lengths=text_lengths,
             )
         
         # Process outputs
@@ -368,18 +381,6 @@ class FoundationPredictor(BasePredictor):
         processed_outputs = self.process_outputs(outputs, num_valid_tokens=num_valid_tokens)
         # Update to account for the newly generated tokens
         self.kv_cache.attention_mask[idxs_to_merge] = attention_mask[:len(idxs_to_merge)]
-
-        # Find text lenghts of each
-        is_special = (input_ids.unsqueeze(-1) == self.special_token_ids).any(-1)  # (batch, seq_len)
-        text_lengths = []
-        for i in range(len(idxs_to_merge)):
-            special_positions = is_special[i].nonzero(as_tuple=True)[0]
-            if len(special_positions) > 0:
-                # Assuming special tokens are contiguous at the start
-                prefix_len = special_positions[-1].item() + 1
-            else:
-                prefix_len = 0
-            text_lengths.append(input_ids.shape[1] - prefix_len)
 
         self.kv_cache.update_text_counts(idxs_to_merge, text_lengths)
 
