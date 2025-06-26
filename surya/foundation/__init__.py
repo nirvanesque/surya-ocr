@@ -424,9 +424,9 @@ class FoundationPredictor(BasePredictor):
 
         return new_input, processed_outputs, idxs_to_merge
 
-    def get_image_token_count(self, image: np.ndarray, task_name: TaskNames) -> int:
-        image = self.processor.scale_to_fit(image, self.tasks[task_name]["img_size"])
-        tiles, _ = self.processor._process_and_tile(image)
+    def get_max_image_token_count(self, task_name: TaskNames) -> int:
+        dummy_image = np.zeros(shape=(*self.tasks[task_name]["img_size"], 3))
+        tiles, _ = self.processor._process_and_tile(dummy_image)
         num_image_tokens = tiles.shape[0] / self.processor.merge_size**2
         
         # Extra 1 to account for rotation token when present.
@@ -455,7 +455,7 @@ class FoundationPredictor(BasePredictor):
         batch_size = min(len(images), batch_size)
         current_inputs = None
         
-        max_image_tokens = max(self.get_image_token_count(image, task) for (image, task) in zip(images, task_names))
+        max_image_tokens = max(self.get_max_image_token_count(task) for task in set(task_names))
         self.setup_cache(batch_size, max_cache_len=max_image_tokens + self.model.config.sliding_window)
 
         batch_max_tokens = {}
