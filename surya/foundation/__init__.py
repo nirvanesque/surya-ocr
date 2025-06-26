@@ -35,8 +35,8 @@ logger = get_logger()
 class ContinuousBatchInput:
     input_ids: torch.Tensor
     position_ids: torch.Tensor
-    # input_ids and position_ids may be padded, num_text_tokens tracks the 'real' counts
-    num_text_tokens: torch.Tensor
+    # input_ids and position_ids may be padded, num_valid_tokens tracks the 'real' counts
+    num_valid_tokens: torch.Tensor
     # count the number of predicted tokens for each batch element so far
     num_predicted_tokens: torch.Tensor
 
@@ -176,15 +176,15 @@ class FoundationPredictor(BasePredictor):
 
         return batch
 
-    def process_outputs(self, outputs: SuryaModelOutput, num_text_tokens: torch.Tensor) -> ContinuousBatchOutput:
+    def process_outputs(self, outputs: SuryaModelOutput, num_valid_tokens: torch.Tensor) -> ContinuousBatchOutput:
         lm_logits = outputs["lm_logits"].float()  # shape: [B, T, V]
         bbox_logits = outputs["bbox_logits"].float()  # shape: [B, T, D]
         
-        token_indices = num_text_tokens - 1  # shape: [B]
+        token_indices = num_valid_tokens - 1  # shape: [B]
         token_indices = token_indices.view(-1, 1, 1).expand(-1, 1, lm_logits.size(-1))  # shape: [B, 1, V]
         token_indices = token_indices.to(torch.int64)       # gather expects int64 for index
 
-        bbox_indices = num_text_tokens - 1
+        bbox_indices = num_valid_tokens - 1
         bbox_indices = bbox_indices.view(-1, 1, 1).expand(-1, 1, bbox_logits.size(-1))  # shape: [B, 1, D]
         bbox_indices = bbox_indices.to(torch.int64)         # gather expects int64 for index
 
@@ -250,13 +250,13 @@ class FoundationPredictor(BasePredictor):
         input_ids = current_inputs.input_ids
         position_ids = current_inputs.position_ids
         num_predicted_tokens = current_inputs.num_predicted_tokens
-        num_text_tokens = current_inputs.num_text_tokens
+        num_valid_tokens = current_inputs.num_valid_tokens
 
         # TODO Setup for multi token generation
-        num_text_tokens = torch.ones((self.kv_cache.max_batch_size, 1), dtype=torch.long, device=input_ids.device)
+        num_valid_tokens = torch.ones((self.kv_cache.max_batch_size, 1), dtype=torch.long, device=input_ids.device)
         # Pre-shift the attention mask based on the cache update
         self.kv_cache.maybe_shift_attention_mask(
-            num_text_tokens=num_text_tokens,
+            num_valid_tokens=num_valid_tokens,
         )
         with settings.INFERENCE_MODE():
             outputs = self.model(
@@ -265,24 +265,24 @@ class FoundationPredictor(BasePredictor):
                 position_ids=position_ids,
                 use_cache=True,
                 past_key_values=self.kv_cache,
-                logits_to_keep=torch.max(num_text_tokens).item(),
+                logits_to_keep=torch.max(num_valid_tokens).item(),
                 prefill=False,
-                num_text_tokens=num_text_tokens
+                num_valid_tokens=num_valid_tokens
             )
 
         # Only returns 1 token per batch element
-        processed_output: ContinuousBatchOutput = self.process_outputs(outputs, num_text_tokens)
+        processed_output: ContinuousBatchOutput = self.process_outputs(outputs, num_valid_tokens)
         
         input_ids = processed_output.input_ids
         num_predicted_tokens += 1
-        input_ids, num_text_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
+        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
         # TODO we should only consider position_ids upto the valid range for each batch element
         position_ids = position_ids[:, -1:] + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
 
         new_input = ContinuousBatchInput(
             input_ids=input_ids,
             position_ids=position_ids,
-            num_text_tokens=num_text_tokens,
+            num_valid_tokens=num_valid_tokens,
             num_predicted_tokens=num_predicted_tokens
         )
 
@@ -360,12 +360,12 @@ class FoundationPredictor(BasePredictor):
                 encoder_chunk_size=self.get_encoder_chunk_size(),
                 cache_idxs=idxs_to_merge,
                 prefill=True,
-                num_text_tokens=None   # Not required during prefill
+                num_valid_tokens=None   # Not required during prefill
             )
         
         # Process outputs
-        num_text_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device)    # No extra tokens during prefill
-        processed_outputs = self.process_outputs(outputs, num_text_tokens=num_text_tokens)
+        num_valid_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device)    # No extra tokens during prefill
+        processed_outputs = self.process_outputs(outputs, num_valid_tokens=num_valid_tokens)
         # Update to account for the newly generated tokens
         self.kv_cache.attention_mask[idxs_to_merge] = attention_mask[:len(idxs_to_merge)]
 
@@ -389,7 +389,7 @@ class FoundationPredictor(BasePredictor):
             new_input = ContinuousBatchInput(
                 input_ids=processed_outputs.input_ids,
                 position_ids=position_ids,
-                num_text_tokens=num_text_tokens,
+                num_valid_tokens=num_valid_tokens,
                 num_predicted_tokens=torch.ones((self.kv_cache.max_batch_size, 1), device=self.model.device)
             )
 
@@ -409,8 +409,8 @@ class FoundationPredictor(BasePredictor):
         current_input_ids[idxs_to_merge] = input_ids
         current_position_ids[idxs_to_merge] = position_ids
 
-        current_num_text_tokens = current_inputs.num_text_tokens
-        current_num_text_tokens[idxs_to_merge] = num_text_tokens
+        current_num_valid_tokens = current_inputs.num_valid_tokens
+        current_num_valid_tokens[idxs_to_merge] = num_valid_tokens
 
         current_num_predicted_tokens = current_inputs.num_predicted_tokens
         current_num_predicted_tokens[idxs_to_merge] = torch.ones((len(idxs_to_merge), 1), device=self.model.device)
@@ -418,7 +418,7 @@ class FoundationPredictor(BasePredictor):
         new_input = ContinuousBatchInput(
             input_ids=current_input_ids,
             position_ids=current_position_ids,
-            num_text_tokens=current_num_text_tokens,
+            num_valid_tokens=current_num_valid_tokens,
             num_predicted_tokens=current_num_predicted_tokens
         )
 
