@@ -435,7 +435,7 @@ class FoundationPredictor(BasePredictor):
 
     def prediction_loop(
         self,
-        images: List[Image.Image],
+        images: List[np.ndarray],
         input_texts: List[str],
         task_names: List[TaskNames],
         batch_size: int | None = None,

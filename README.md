@@ -218,10 +218,12 @@ Setting the `LAYOUT_BATCH_SIZE` env var properly will make a big difference when
 
 ```python
 from PIL import Image
+from surya.foundation import FoundationPredictor
 from surya.layout import LayoutPredictor
 
 image = Image.open(IMAGE_PATH)
-layout_predictor = LayoutPredictor()
+foundation_predictor = FoundationPredictor()
+layout_predictor = LayoutPredictor(foundation_predictor)
 
 # layout_predictions is a list of dicts, one per image
 layout_predictions = layout_predictor([image])

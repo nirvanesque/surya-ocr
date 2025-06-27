@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     COMPILE_DETECTOR: bool = False
 
     # Text recognition
-    FOUNDATION_MODEL_CHECKPOINT: str = "s3://text_recognition/2025_05_16"
+    FOUNDATION_MODEL_CHECKPOINT: str = "datalab-to/foundation-2.9"
     FOUNDATION_MODEL_QUANTIZE: bool = False
     FOUNDATION_MAX_TOKENS: Optional[int] = None
     RECOGNITION_CHUNK_SIZE: Optional[int] = None
@@ -97,17 +97,8 @@ class Settings(BaseSettings):
     RECOGNITION_PAD_VALUE: int = 255  # Should be 0 or 255
 
     # Layout
-    LAYOUT_MODEL_CHECKPOINT: str = "s3://layout/2025_02_18"
-    LAYOUT_IMAGE_SIZE: Dict = {"height": 768, "width": 768}
-    LAYOUT_SLICE_MIN: Dict = {
-        "height": 1500,
-        "width": 1500,
-    }  # When to start slicing images
-    LAYOUT_SLICE_SIZE: Dict = {"height": 1200, "width": 1200}  # Size of slices
     LAYOUT_BATCH_SIZE: Optional[int] = None
     LAYOUT_BENCH_DATASET_NAME: str = "vikp/publaynet_bench"
-    LAYOUT_MAX_BOXES: int = 100
-    COMPILE_LAYOUT: bool = False
     ORDER_BENCH_DATASET_NAME: str = "vikp/order_bench"
 
     # Table Rec

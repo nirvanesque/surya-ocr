@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import List
 
 import numpy as np
@@ -24,12 +23,11 @@ from surya.recognition.postprocessing import fix_unbalanced_tags
 from surya.recognition.util import (
     sort_text_lines,
     clean_close_polygons,
-    prediction_to_polygon_batch,
     unwrap_math,
     clean_math_tags,
     words_from_chars
 )
-from surya.foundation.util import detect_repeat_token
+from surya.foundation.util import detect_repeat_token, prediction_to_polygon_batch
 from surya.recognition.schema import TextLine, OCRResult, TextChar
 from surya.common.surya.schema import TaskNames
 from surya.settings import settings
@@ -37,32 +35,6 @@ from surya.logging import get_logger, configure_logging
 
 configure_logging()
 logger = get_logger()
-
-
-@dataclass
-class ContinuousBatchInput:
-    input_ids: torch.Tensor
-    attention_mask: torch.Tensor
-    position_ids: torch.Tensor
-
-
-@dataclass
-class ContinuousBatchOutput:
-    input_ids: torch.Tensor
-    preds: torch.Tensor
-    bbox_preds: torch.Tensor
-    done: torch.Tensor
-    scores: torch.Tensor
-
-
-@dataclass
-class RecognitionPrompt:
-    id: int
-    task_name: TaskNames
-    image: np.ndarray
-    text: str
-    math_mode: bool
-
 
 class RecognitionPredictor(BasePredictor):
     batch_size = settings.RECOGNITION_BATCH_SIZE
