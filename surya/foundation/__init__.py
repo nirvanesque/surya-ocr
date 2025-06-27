@@ -226,8 +226,6 @@ class FoundationPredictor(BasePredictor):
         input_ids: torch.Tensor,
         num_predicted_tokens: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return input_ids, torch.ones((input_ids.shape[0], 1), device=input_ids.device, dtype=torch.long)
-        raise NotImplementedError()
         batch_size = input_ids.shape[0]
 
         token = input_ids.squeeze(1)  # shape: [batch_size]
@@ -256,7 +254,7 @@ class FoundationPredictor(BasePredictor):
 
         # Pre-shift the attention mask based on the cache update
         self.kv_cache.maybe_shift_attention_mask(
-            num_valid_tokens=num_valid_tokens,
+            num_valid_tokens=num_valid_tokens, cache_idxs=list(range(input_ids.shape[0]))
         )
         with settings.INFERENCE_MODE():
             outputs = self.model(
@@ -275,7 +273,8 @@ class FoundationPredictor(BasePredictor):
         
         input_ids = processed_output.input_ids
         num_predicted_tokens += 1
-        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
+
+        # input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
         # TODO we should only consider position_ids upto the valid range for each batch element
         position_ids = position_ids[:, -1:] + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
 
