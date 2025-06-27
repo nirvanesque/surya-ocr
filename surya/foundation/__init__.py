@@ -51,7 +51,7 @@ class ContinuousBatchOutput:
 
 
 @dataclass
-class RecognitionPrompt:
+class FoundationPrompt:
     id: int
     task_name: TaskNames
     image: np.ndarray
@@ -316,7 +316,7 @@ class FoundationPredictor(BasePredictor):
 
     def prefill(self, current_inputs: Optional[ContinuousBatchInput] = None):
         logger.debug(f"Prefilling {self.num_empty_slots} slots")
-        prompts: List[RecognitionPrompt] = [
+        prompts: List[FoundationPrompt] = [
             self.prompt_queue.popleft()
             for _ in range(min(self.num_empty_slots, len(self.prompt_queue)))
         ]
@@ -464,7 +464,7 @@ class FoundationPredictor(BasePredictor):
             zip(images, input_texts, task_names)
         ):
             self.prompt_queue.append(
-                RecognitionPrompt(
+                FoundationPrompt(
                     id=idx, task_name=task, text=txt, image=img, math_mode=math_mode
                 )
             )
