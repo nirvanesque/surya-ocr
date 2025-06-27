@@ -12,6 +12,7 @@ from surya.settings import settings
 from surya.foundation import FoundationPredictor, TaskNames
 from surya.foundation.util import prediction_to_polygon_batch
 from surya.input.processing import convert_if_not_rgb
+from surya.layout.label import LAYOUT_PRED_RELABEL
 
 class LayoutPredictor(BasePredictor):
     batch_size = settings.LAYOUT_BATCH_SIZE
@@ -61,7 +62,8 @@ class LayoutPredictor(BasePredictor):
                 if tok == self.processor.eos_token_id:
                     break
 
-                label = self.processor.decode([tok], "layout")
+                predicted_label = self.processor.decode([tok], "layout")
+                label = LAYOUT_PRED_RELABEL[predicted_label]
                 layout_boxes.append(LayoutBox(
                     polygon=poly.tolist(),
                     label=label,
