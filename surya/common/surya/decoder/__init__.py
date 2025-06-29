@@ -178,14 +178,6 @@ class Qwen2Attention(nn.Module):
             query_states, key_states, cos, sin
         )
 
-        is_prefill = all(
-            (
-                input_shape[1] > 1,
-                (past_key_value is None)
-                or (past_key_value.get_seq_length(self.layer_idx) == 0),
-            )
-        )
-
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             # cache_idxs, num_valid_tokens, and prefill add support for our new caching mechanism 
@@ -212,7 +204,7 @@ class Qwen2Attention(nn.Module):
                     'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
                 )
             elif self.config._attn_implementation == "flash_attention_2":
-                if is_prefill:
+                if prefill:
                     attention_interface = flash_attn_prefill
                 else:
                     attention_interface = flash_attn_decode

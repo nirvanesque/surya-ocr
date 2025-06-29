@@ -111,7 +111,6 @@ def flash_attn_prefill(
     attention_mask: torch.Tensor,
     dropout: float,
     scaling: float,
-    sliding_window: Optional[int],
     query_length: int,
     batch_size: int,
     indices_k: torch.Tensor,
@@ -135,8 +134,6 @@ def flash_attn_prefill(
     cu_seqlens_q, cu_seqlens_k = cu_seq_lens
     max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
 
-    flash_kwargs = {"window_size": (sliding_window, sliding_window)} if sliding_window else {}
-
     # Returning None for attn_weights to match other attention interfaces
     flash_attn_out = _flash_attn_varlen_func(
         q_flash,
@@ -149,7 +146,6 @@ def flash_attn_prefill(
         dropout_p=dropout,
         softmax_scale=scaling,
         causal=module.is_causal,
-        **flash_kwargs
     )
     return pad_input(flash_attn_out, indices_q, batch_size, query_length), None
 
@@ -161,13 +157,12 @@ def flash_attn_decode(
     value_states: torch.Tensor,
     attention_mask: torch.Tensor,
     scaling: float,
-    sliding_window: bool,
     **kwargs,
 ):
     """
     Wrapper for flash attention during the decode stage
     
-    query_states must have shape (batch_size, num_heads, 1, head_dim), 1 is the seq length in the decoding stage
+    query_states must have shape (batch_size, num_heads, seq_len, head_dim), 1 is the seq length in the decoding stage
     key_states and value_states must have shape (batch_size, num_kv_heads, kv_len, head_dim)
 
     This is the opposite of what is required by flash attention, but keeps parity with the HF convention
@@ -177,14 +172,12 @@ def flash_attn_decode(
     cache_leftpad = (attention_mask == 0).cumprod(dim=1).sum(dim=1)
     cache_leftpad = cache_leftpad.to(torch.int32)
     
-    flash_kwargs = {'window_size': (sliding_window, sliding_window)} if sliding_window else {}
     # Returning None for attn_weights to match other attention interfaces
     return _flash_attn_with_kvcache(
         q=query_states,
         k_cache=key_states,
         v_cache=value_states,
         cache_leftpad=cache_leftpad,
-        causal=module.is_causal,
+        causal=False,
         softmax_scale=scaling,
-        **flash_kwargs
     ), None

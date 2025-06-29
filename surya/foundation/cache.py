@@ -97,13 +97,10 @@ class ContinuousBatchingCache(StaticCache):
                 shift = new_text_len
                 self._shift_attention_mask_left(cache_idx, shift)
             else:
-                # We need to figure out how many text tokens to keep and where to place them
-                keep = self.text_sliding_window - new_text_len
-                assert keep > 0, "Cannot add more new text tokens than the sliding window"
-                
                 # Shift entire cache left to make room for full text sliding window
                 shift_amount = self.text_sliding_window - curr_text_cache_len
-                if shift_amount > 0:        # Cannot be negative, may be exactly 0
+                # If this is <=0, we are already above the sliding window, so the attention mask stays the same
+                if shift_amount > 0:
                     self._shift_attention_mask_left(cache_idx, shift_amount)
                 
     # Mirrors the logic from _prefill_update
@@ -222,7 +219,7 @@ class ContinuousBatchingCache(StaticCache):
 
             curr_text_cache_len = self.text_token_counts[layer_idx][cache_idx].item()
 
-            k_new = key_states[batch_idx, :, :new_text_len, :]  # (H, new_text_len, D)
+            k_new = key_states[batch_idx, :, :new_text_len, :]
             v_new = value_states[batch_idx, :, :new_text_len, :]
 
             if curr_text_cache_len + new_text_len <= self.text_sliding_window:
@@ -230,9 +227,8 @@ class ContinuousBatchingCache(StaticCache):
                 # Since we setup the max cache length with enough buffer, this will ONLY drop 
                 # left padding tokens out
                 shift = new_text_len
-                if curr_text_cache_len > 0:
-                    k_cache[cache_idx, :, :-shift, :] = k_cache[cache_idx, :, shift:, :].clone()
-                    v_cache[cache_idx, :, :-shift, :] = v_cache[cache_idx, :, shift:, :].clone()
+                k_cache[cache_idx, :, :-shift, :] = k_cache[cache_idx, :, shift:, :].clone()
+                v_cache[cache_idx, :, :-shift, :] = v_cache[cache_idx, :, shift:, :].clone()
                 k_cache[cache_idx, :, -shift:, :] = k_new
                 v_cache[cache_idx, :, -shift:, :] = v_new
 

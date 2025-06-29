@@ -230,7 +230,11 @@ class FoundationPredictor(BasePredictor):
 
         token = input_ids.squeeze(1)  # shape: [batch_size]
         add_beacon = (num_predicted_tokens % self.beacon_token_interval== 0).squeeze()
-        
+
+        # Return if no beacon tokens need to be added
+        if torch.all(~add_beacon):
+            return input_ids, torch.ones((input_ids.shape[0]), dtype=torch.long, device=input_ids.device)
+
         # Output tensors
         new_input_ids = torch.full((batch_size, 2), self.device_pad_token, dtype=input_ids.dtype, device=input_ids.device)
 
@@ -251,10 +255,11 @@ class FoundationPredictor(BasePredictor):
         position_ids = current_inputs.position_ids
         num_predicted_tokens = current_inputs.num_predicted_tokens
         num_valid_tokens = current_inputs.num_valid_tokens
+        batch_size = input_ids.shape[0]
 
         # Pre-shift the attention mask based on the cache update
         self.kv_cache.maybe_shift_attention_mask(
-            num_valid_tokens=num_valid_tokens, cache_idxs=list(range(input_ids.shape[0]))
+            num_valid_tokens=num_valid_tokens, cache_idxs=list(range(batch_size))
         )
         with settings.INFERENCE_MODE():
             outputs = self.model(
@@ -263,7 +268,8 @@ class FoundationPredictor(BasePredictor):
                 position_ids=position_ids,
                 use_cache=True,
                 past_key_values=self.kv_cache,
-                logits_to_keep=torch.max(num_valid_tokens).item(),
+                # We may pass multiple input ids per batch element (right padded) and we need the original size to index into them
+                logits_to_keep=None,
                 prefill=False,
                 num_valid_tokens=num_valid_tokens
             )
@@ -274,9 +280,12 @@ class FoundationPredictor(BasePredictor):
         input_ids = processed_output.input_ids
         num_predicted_tokens += 1
 
-        # input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
-        # TODO we should only consider position_ids upto the valid range for each batch element
-        position_ids = position_ids[:, -1:] + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
+        batch_indices = torch.arange(batch_size, device=position_ids.device)
+        last_token_indices = (num_valid_tokens - 1)
+        last_valid_positions = position_ids[batch_indices, last_token_indices].reshape(batch_size, 1)
+
+        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
+        position_ids = last_valid_positions + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
 
         new_input = ContinuousBatchInput(
             input_ids=input_ids,
@@ -377,7 +386,7 @@ class FoundationPredictor(BasePredictor):
         
         # Process outputs
         # No extra tokens during prefill
-        num_valid_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device, dtype=torch.long)
+        num_valid_tokens = torch.ones((input_ids.shape[0]), device=self.model.device, dtype=torch.long)
         num_predicted_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device, dtype=torch.long)
         processed_outputs = self.process_outputs(outputs, num_valid_tokens=num_valid_tokens)
 
