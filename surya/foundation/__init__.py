@@ -180,17 +180,6 @@ class FoundationPredictor(BasePredictor):
         lm_logits = outputs["lm_logits"].float()  # shape: [B, T, V]
         bbox_logits = outputs["bbox_logits"].float()  # shape: [B, T, D]
         
-        # token_indices = num_valid_tokens - 1  # shape: [B]
-        # token_indices = token_indices.view(-1, 1, 1).expand(-1, 1, lm_logits.size(-1))  # shape: [B, 1, V]
-        # token_indices = token_indices.to(torch.int64)       # gather expects int64 for index
-
-        # bbox_indices = num_valid_tokens - 1
-        # bbox_indices = bbox_indices.view(-1, 1, 1).expand(-1, 1, bbox_logits.size(-1))  # shape: [B, 1, D]
-        # bbox_indices = bbox_indices.to(torch.int64)         # gather expects int64 for index
-
-        # # Gather logits at valid token positions
-        # next_token_logits = torch.gather(lm_logits, dim=1, index=token_indices)  # shape: [B, 1, V]
-        # next_bbox_logits = torch.gather(bbox_logits, dim=1, index=bbox_indices)  # shape: [B, 1, D]
         next_token_logits = lm_logits[:, -1:, :]
         next_bbox_logits = bbox_logits[:, -1:, :]
 
