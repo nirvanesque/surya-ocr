@@ -178,6 +178,6 @@ def flash_attn_decode(
         k_cache=key_states,
         v_cache=value_states,
         cache_leftpad=cache_leftpad,
-        causal=False,
+        causal=module.is_causal,
         softmax_scale=scaling,
     ), None

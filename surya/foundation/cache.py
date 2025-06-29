@@ -219,8 +219,9 @@ class ContinuousBatchingCache(StaticCache):
 
             curr_text_cache_len = self.text_token_counts[layer_idx][cache_idx].item()
 
-            k_new = key_states[batch_idx, :, :new_text_len, :]
-            v_new = value_states[batch_idx, :, :new_text_len, :]
+            # Decode is **left-padded** so we ignore these tokens
+            k_new = key_states[batch_idx, :, -new_text_len:, :]
+            v_new = value_states[batch_idx, :, -new_text_len:, :]
 
             if curr_text_cache_len + new_text_len <= self.text_sliding_window:
                 # If we are under the sliding window length, shift the entire cache left

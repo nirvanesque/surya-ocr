@@ -180,17 +180,19 @@ class FoundationPredictor(BasePredictor):
         lm_logits = outputs["lm_logits"].float()  # shape: [B, T, V]
         bbox_logits = outputs["bbox_logits"].float()  # shape: [B, T, D]
         
-        token_indices = num_valid_tokens - 1  # shape: [B]
-        token_indices = token_indices.view(-1, 1, 1).expand(-1, 1, lm_logits.size(-1))  # shape: [B, 1, V]
-        token_indices = token_indices.to(torch.int64)       # gather expects int64 for index
+        # token_indices = num_valid_tokens - 1  # shape: [B]
+        # token_indices = token_indices.view(-1, 1, 1).expand(-1, 1, lm_logits.size(-1))  # shape: [B, 1, V]
+        # token_indices = token_indices.to(torch.int64)       # gather expects int64 for index
 
-        bbox_indices = num_valid_tokens - 1
-        bbox_indices = bbox_indices.view(-1, 1, 1).expand(-1, 1, bbox_logits.size(-1))  # shape: [B, 1, D]
-        bbox_indices = bbox_indices.to(torch.int64)         # gather expects int64 for index
+        # bbox_indices = num_valid_tokens - 1
+        # bbox_indices = bbox_indices.view(-1, 1, 1).expand(-1, 1, bbox_logits.size(-1))  # shape: [B, 1, D]
+        # bbox_indices = bbox_indices.to(torch.int64)         # gather expects int64 for index
 
-        # Gather logits at valid token positions
-        next_token_logits = torch.gather(lm_logits, dim=1, index=token_indices)  # shape: [B, 1, V]
-        next_bbox_logits = torch.gather(bbox_logits, dim=1, index=bbox_indices)  # shape: [B, 1, D]
+        # # Gather logits at valid token positions
+        # next_token_logits = torch.gather(lm_logits, dim=1, index=token_indices)  # shape: [B, 1, V]
+        # next_bbox_logits = torch.gather(bbox_logits, dim=1, index=bbox_indices)  # shape: [B, 1, D]
+        next_token_logits = lm_logits[:, -1:, :]
+        next_bbox_logits = bbox_logits[:, -1:, :]
 
         # Get predictions
         preds = torch.argmax(next_token_logits, dim=-1)  # shape: [B, 1]
@@ -221,6 +223,10 @@ class FoundationPredictor(BasePredictor):
             scores=scores,
         )
 
+    # Make space for beacon tokens to be inserted while keeping the same seq len across all batch elements
+    # This involves **left padding** the input sequence. Although this is unconventional, it works better
+    # with the causal mask of flash attention, and we are careful to ignore this pad token when inserting
+    # into cache
     def maybe_insert_beacon_tokens(
         self,
         input_ids: torch.Tensor,
@@ -242,8 +248,8 @@ class FoundationPredictor(BasePredictor):
         new_input_ids[add_beacon, 0] = self.device_beacon_token
         new_input_ids[add_beacon, 1] = token[add_beacon]
 
-        # pad stays at position 1 for non-beacon rows
-        new_input_ids[~add_beacon, 0] = token[~add_beacon]
+        # pad stays at position 0 for non-beacon rows
+        new_input_ids[~add_beacon, 1] = token[~add_beacon]
 
         # Count valid tokens: 2 if beacon added, 1 otherwise
         valid_token_counts = torch.where(add_beacon, torch.tensor(2, device=input_ids.device), torch.tensor(1, device=input_ids.device))
