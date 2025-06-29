@@ -304,6 +304,31 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             all_embeddings, dim=0
         )  # Shape is num_image_tokens x embed_dim
 
+    def get_logits(self, hidden_states):
+        assert hidden_states.shape[1] == 1, "Multi output predictions only applied on the last token"
+
+        all_lm_logits = []
+        all_bbox_logits = []
+        
+        current_hidden = hidden_states
+        
+        # Loop includes initial prediction (i=0) plus multi_out_distance additional predictions
+        for i in range(self.config.multi_output_distance + 1):
+            if i > 0:
+                current_hidden = self.multi_output_projections[i-1](current_hidden)
+            
+            lm_logits = self.lm_head(current_hidden)
+            bbox_logits = F.sigmoid(self.bbox_head(current_hidden))
+            
+            all_lm_logits.append(lm_logits)
+            all_bbox_logits.append(bbox_logits)
+        
+        # Concatenate along sequence dimension (dim=1)
+        final_lm_logits = torch.cat(all_lm_logits, dim=1)
+        final_bbox_logits = torch.cat(all_bbox_logits, dim=1)
+        
+        return final_lm_logits, final_bbox_logits
+
     def forward(
         self,
         input_ids=None,
@@ -317,7 +342,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         output_hidden_states=False,
         output_attentions=False,
         use_cache=False,
-        logits_to_keep=None,
         encoder_chunk_size=None,
         cache_idxs=None,
         num_valid_tokens=None,
@@ -386,12 +410,9 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
 
         hidden_states = outputs.last_hidden_state
         # Only keep the last `logits_to_keep` logits, should bring down memory usage during inference
-        if logits_to_keep is not None:
-            hidden_states = hidden_states[:, -logits_to_keep:, :]
-
+        hidden_states = hidden_states[:, -1:, :]
         hidden_states = hidden_states.contiguous()
-        bbox_logits = F.sigmoid(self.bbox_head(hidden_states))
-        lm_logits = self.lm_head(hidden_states)
+        lm_logits, bbox_logits = self.get_logits(hidden_states)
 
         return SuryaModelOutput(
             bbox_logits=bbox_logits,

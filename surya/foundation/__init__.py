@@ -180,8 +180,11 @@ class FoundationPredictor(BasePredictor):
         lm_logits = outputs["lm_logits"].float()  # shape: [B, T, V]
         bbox_logits = outputs["bbox_logits"].float()  # shape: [B, T, D]
         
-        next_token_logits = lm_logits[:, -1:, :]
-        next_bbox_logits = bbox_logits[:, -1:, :]
+        # We make multitoken predictions - Currently only considering the first predicted token
+        # TODO Add support for using all the predictions
+        # TODO This requires a change to the beacon token logic
+        next_token_logits = lm_logits[:, :1, :]
+        next_bbox_logits = bbox_logits[:, :1, :]
 
         # Get predictions
         preds = torch.argmax(next_token_logits, dim=-1)  # shape: [B, 1]
@@ -263,8 +266,6 @@ class FoundationPredictor(BasePredictor):
                 position_ids=position_ids,
                 use_cache=True,
                 past_key_values=self.kv_cache,
-                # We may pass multiple input ids per batch element (right padded) and we need the original size to index into them
-                logits_to_keep=None,
                 prefill=False,
                 num_valid_tokens=num_valid_tokens
             )
@@ -371,7 +372,6 @@ class FoundationPredictor(BasePredictor):
                 inputs_embeds=None,
                 past_key_values=self.kv_cache,
                 use_cache=True,
-                logits_to_keep=1,
                 encoder_chunk_size=self.get_encoder_chunk_size(),
                 cache_idxs=idxs_to_merge,
                 prefill=True,
