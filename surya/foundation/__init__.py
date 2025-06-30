@@ -46,7 +46,6 @@ class ContinuousBatchOutput:
     input_ids: torch.Tensor
     preds: torch.Tensor
     bbox_preds: torch.Tensor
-    done: torch.Tensor
     scores: torch.Tensor
 
 
@@ -176,42 +175,27 @@ class FoundationPredictor(BasePredictor):
 
         return batch
 
-    def process_outputs(self, outputs: SuryaModelOutput, num_valid_tokens: torch.Tensor) -> ContinuousBatchOutput:
-        lm_logits = outputs["lm_logits"].float()  # shape: [B, T, V]
-        bbox_logits = outputs["bbox_logits"].float()  # shape: [B, T, D]
+    def process_outputs(self, outputs: SuryaModelOutput) -> ContinuousBatchOutput:
+        # Predictions are multi-token
+        lm_logits = outputs["lm_logits"].float()  # shape: [batch_size, seq_len, V]
+        bbox_logits = outputs["bbox_logits"].float()  # shape: [batch_size, seq_len, 6]
         
-        # We make multitoken predictions - Currently only considering the first predicted token
-        # TODO Add support for using all the predictions
-        # TODO This requires a change to the beacon token logic
-        next_token_logits = lm_logits[:, :1, :]
-        next_bbox_logits = bbox_logits[:, :1, :]
-
         # Get predictions
-        preds = torch.argmax(next_token_logits, dim=-1)  # shape: [B, 1]
+        preds = torch.argmax(lm_logits, dim=-1)
+        input_ids = preds.to(torch.long)
 
-        # Handle inference completion
-        done = (preds == self.processor.eos_token_id) | (
-            preds == self.processor.pad_token_id
-        )
-        done = done.squeeze(-1)
-        # If this batch item is done, input a pad token
-        input_ids = torch.where(done.unsqueeze(1), self.device_pad_token, preds).to(
-            torch.long
-        )
-
-        # Confidence score for the current token
-        scores = torch.max(F.softmax(next_token_logits[:, -1], dim=-1), dim=-1).values
-        scores = scores.masked_fill(done, 0).unsqueeze(1)
+        # Confidence scores for all tokens
+        token_probs = F.softmax(lm_logits, dim=-1)
+        scores = torch.max(token_probs, dim=-1).values  # shape: [B, T]
 
         # Update input boxes
-        box_preds = next_bbox_logits * self.model.config.bbox_size
+        box_preds = bbox_logits * self.model.config.bbox_size
         box_preds = box_preds.to(torch.long)
 
         return ContinuousBatchOutput(
             input_ids=input_ids,
             preds=preds,
             bbox_preds=box_preds,
-            done=done,
             scores=scores,
         )
 
@@ -285,8 +269,7 @@ class FoundationPredictor(BasePredictor):
                 num_valid_tokens=num_valid_tokens
             )
 
-        # Only returns 1 token per batch element
-        processed_output: ContinuousBatchOutput = self.process_outputs(outputs, num_valid_tokens)
+        processed_output: ContinuousBatchOutput = self.process_outputs(outputs)
         
         input_ids = processed_output.input_ids
 
@@ -398,17 +381,18 @@ class FoundationPredictor(BasePredictor):
             )
         
         # Process outputs
-        # No extra tokens during prefill
-        num_valid_tokens = torch.ones((input_ids.shape[0]), device=self.model.device, dtype=torch.long)
-        num_predicted_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device, dtype=torch.long)
-        processed_outputs = self.process_outputs(outputs, num_valid_tokens=num_valid_tokens)
+        processed_outputs = self.process_outputs(outputs)
+        # Multi-token prediction
+        predicted_tokens = processed_outputs.input_ids.shape[1]
+        num_valid_tokens = torch.ones((input_ids.shape[0]), device=self.model.device, dtype=torch.long) * predicted_tokens
+        num_predicted_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device, dtype=torch.long) * predicted_tokens
 
         self.kv_cache.prefill_attention_mask_update(attention_mask, idxs_to_merge, text_lengths)
         self.kv_cache.update_text_counts(idxs_to_merge, text_lengths)
 
         if current_inputs is None:
-            # In this case, we only return 1 token, and position_ids should match that
-            position_ids = position_ids[:, -1:] + 1
+            new_seq_len = processed_outputs.input_ids.shape[1]
+            position_ids = position_ids[:, -1:] + torch.arange(1, new_seq_len + 1, device=position_ids.device)
             new_input = ContinuousBatchInput(
                 input_ids=processed_outputs.input_ids,
                 position_ids=position_ids,
@@ -516,21 +500,23 @@ class FoundationPredictor(BasePredictor):
                 for temp_idx, b_idx in enumerate(merge_idxs):
                     if self.batch_prompt_mapping[b_idx] is not None:
                         p_idx = self.batch_prompt_mapping[b_idx]
-                        predicted_tokens[p_idx].append(
-                            predicted_tokens_cpu[temp_idx].item()
-                        )
-                        batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
-                            temp_idx
-                        ][0]
-                        batch_pos[p_idx] += 1
-                        scores[p_idx].append(scores_cpu[temp_idx].item())
+                        seq_len = predicted_tokens_cpu.shape[1]
+                        for t_idx in range(seq_len):
+                            token = predicted_tokens_cpu[temp_idx, t_idx].item()
+                            predicted_tokens[p_idx].append(token)
+                            batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
+                                temp_idx, t_idx
+                            ]
+                            batch_pos[p_idx] += 1
+                            scores[p_idx].append(scores_cpu[temp_idx, t_idx].item())
 
-                        if predicted_tokens[p_idx][-1] in [
-                            self.processor.eos_token_id,
-                            self.processor.no_output_token,
-                        ]:
-                            self.batch_prompt_mapping[b_idx] = None
-                            pbar.update(1)
+                            if token in [
+                                self.processor.eos_token_id,
+                                self.processor.no_output_token,
+                            ]:
+                                self.batch_prompt_mapping[b_idx] = None
+                                pbar.update(1)
+                                break
             else:
                 updated_inputs, outputs = self.decode(current_inputs)
                 predicted_tokens_cpu = outputs.preds.cpu()
@@ -538,28 +524,36 @@ class FoundationPredictor(BasePredictor):
 
                 for b_idx, p_idx in self.batch_prompt_mapping.items():
                     if p_idx is not None:
-                        predicted_tokens[p_idx].append(
-                            predicted_tokens_cpu[b_idx].item()
-                        )
-                        batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
-                            b_idx
-                        ][0]
-                        batch_pos[p_idx] += 1
+                        seq_len = predicted_tokens_cpu.shape[1]
+                        should_stop = False
+                        # print(seq_len)
 
-                        scores[p_idx].append(scores_cpu[b_idx].item())
-
-                        repeats = (
-                            len(predicted_tokens[p_idx]) >= batch_max_tokens[p_idx]
-                            or (drop_repeated_tokens and detect_repeat_token(predicted_tokens[p_idx]))
-                        )
-                        if (
-                            predicted_tokens[p_idx][-1]
-                            in [
-                                self.processor.eos_token_id,
-                                self.processor.pad_token_id,
+                        for t_idx in range(seq_len):
+                            # print(b_idx, t_idx)
+                            token = predicted_tokens_cpu[b_idx, t_idx].item()
+                            predicted_tokens[p_idx].append(token)
+                            batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
+                                b_idx, t_idx
                             ]
-                            or repeats
-                        ):
+                            batch_pos[p_idx] += 1
+                            scores[p_idx].append(scores_cpu[b_idx, t_idx].item())
+
+                            repeats = (
+                                len(predicted_tokens[p_idx]) >= batch_max_tokens[p_idx]
+                                or (drop_repeated_tokens and detect_repeat_token(predicted_tokens[p_idx]))
+                            )
+                            if (
+                                token
+                                in [
+                                    self.processor.eos_token_id,
+                                    self.processor.pad_token_id,
+                                ]
+                                or repeats
+                            ):
+                                should_stop = True
+                                break
+
+                        if should_stop:
                             self.batch_prompt_mapping[b_idx] = None
                             pbar.update(1)
 
