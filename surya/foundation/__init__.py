@@ -224,28 +224,43 @@ class FoundationPredictor(BasePredictor):
         input_ids: torch.Tensor,
         num_predicted_tokens: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        batch_size = input_ids.shape[0]
+        batch_size, seq_len = input_ids.shape       # seq_len can be >1 - In case of multi-token predictions
+        
+        # num_predicted tokens **does not include** the current new input_ids, this number is updated **after beacon tokens are inserted**
+        token_positions = num_predicted_tokens + torch.arange(1, seq_len + 1, device=input_ids.device).unsqueeze(0)
+        beacon_positions = (token_positions % self.beacon_token_interval == 0)
 
-        token = input_ids.squeeze(1)  # shape: [batch_size]
-        add_beacon = (num_predicted_tokens % self.beacon_token_interval== 0).squeeze()
-
-        # Return if no beacon tokens need to be added
-        if torch.all(~add_beacon):
-            return input_ids, torch.ones((input_ids.shape[0]), dtype=torch.long, device=input_ids.device)
-
-        # Output tensors
-        new_input_ids = torch.full((batch_size, 2), self.device_pad_token, dtype=input_ids.dtype, device=input_ids.device)
-
-        # Insert tokens
-        new_input_ids[add_beacon, 0] = self.device_beacon_token
-        new_input_ids[add_beacon, 1] = token[add_beacon]
-
-        # pad stays at position 0 for non-beacon rows
-        new_input_ids[~add_beacon, 1] = token[~add_beacon]
-
-        # Count valid tokens: 2 if beacon added, 1 otherwise
-        valid_token_counts = torch.where(add_beacon, torch.tensor(2, device=input_ids.device), torch.tensor(1, device=input_ids.device))
-
+        # If no beacons needed, return original input
+        needs_beacon = beacon_positions.any(dim=1)  # shape: [batch_size]
+        if not needs_beacon.any():
+            return input_ids, torch.ones(batch_size, dtype=torch.long, device=input_ids.device) * seq_len
+        
+        beacon_insert_pos = torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
+        for i in range(batch_size):
+            if needs_beacon[i]:
+                # Find first position that needs beacon
+                beacon_insert_pos[i] = torch.where(beacon_positions[i])[0]
+      
+        # Padded input ids.
+        new_input_ids = torch.full((batch_size, seq_len + 1), self.device_pad_token, 
+                                dtype=input_ids.dtype, device=input_ids.device)
+        
+        # Fill in tokens for each sequence
+        for i in range(batch_size):
+            if needs_beacon[i]:
+                insert_pos = beacon_insert_pos[i]
+                new_input_ids[i, insert_pos] = self.device_beacon_token
+                if insert_pos > 0:
+                    new_input_ids[i, :insert_pos] = input_ids[i, :insert_pos]
+                new_input_ids[i, insert_pos+1:] = input_ids[i, insert_pos:]
+            else:
+                new_input_ids[i, 1:] = input_ids[i, :]
+        
+        # Calculate valid token counts for both padded and non padded sequences
+        valid_token_counts = torch.where(needs_beacon, 
+                                    torch.tensor(seq_len + 1, device=input_ids.device),
+                                    torch.tensor(seq_len, device=input_ids.device))
+        
         return new_input_ids, valid_token_counts
 
     def decode(self, current_inputs: Optional[ContinuousBatchInput] = None):
@@ -274,13 +289,16 @@ class FoundationPredictor(BasePredictor):
         processed_output: ContinuousBatchOutput = self.process_outputs(outputs, num_valid_tokens)
         
         input_ids = processed_output.input_ids
-        num_predicted_tokens += 1
 
         batch_indices = torch.arange(batch_size, device=position_ids.device)
         last_token_indices = (num_valid_tokens - 1)
         last_valid_positions = position_ids[batch_indices, last_token_indices].reshape(batch_size, 1)
 
+        # We calculate this **before inserting beacons** to get the number of real tokens predicted
+        # Update the number after insertion since this makes the insertion logic a lot simpelr
+        num_new_tokens = input_ids.shape[1]
         input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
+        num_predicted_tokens += num_new_tokens
         position_ids = last_valid_positions + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
 
         new_input = ContinuousBatchInput(
