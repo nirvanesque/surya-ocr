@@ -47,7 +47,8 @@ class LayoutPredictor(BasePredictor):
             images=images,
             input_texts=["" for _ in range(len(images))],
             task_names=[TaskNames.layout for _ in range(len(images))],
-            batch_size=batch_size
+            batch_size=batch_size,
+            max_lookahead_tokens=0      # Do not do MTP for layout
         )
         
         image_sizes = [img.shape for img in images]

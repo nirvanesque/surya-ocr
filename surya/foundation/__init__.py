@@ -175,10 +175,14 @@ class FoundationPredictor(BasePredictor):
 
         return batch
 
-    def process_outputs(self, outputs: SuryaModelOutput) -> ContinuousBatchOutput:
+    def process_outputs(self, outputs: SuryaModelOutput, max_lookahead_tokens: Optional[int]=None) -> ContinuousBatchOutput:
         # Predictions are multi-token
         lm_logits = outputs["lm_logits"].float()  # shape: [batch_size, seq_len, V]
         bbox_logits = outputs["bbox_logits"].float()  # shape: [batch_size, seq_len, 6]
+
+        if max_lookahead_tokens is not None and lm_logits.shape[1] > max_lookahead_tokens + 1:
+            lm_logits = lm_logits[:, :max_lookahead_tokens + 1, :]
+            bbox_logits = bbox_logits[:, :max_lookahead_tokens + 1, :]
         
         # Get predictions
         preds = torch.argmax(lm_logits, dim=-1)
@@ -247,7 +251,7 @@ class FoundationPredictor(BasePredictor):
         
         return new_input_ids, valid_token_counts
 
-    def decode(self, current_inputs: Optional[ContinuousBatchInput] = None):
+    def decode(self, current_inputs: Optional[ContinuousBatchInput] = None, max_lookahead_tokens: Optional[int] = None):
         input_ids = current_inputs.input_ids
         position_ids = current_inputs.position_ids
         num_predicted_tokens = current_inputs.num_predicted_tokens
@@ -269,7 +273,7 @@ class FoundationPredictor(BasePredictor):
                 num_valid_tokens=num_valid_tokens
             )
 
-        processed_output: ContinuousBatchOutput = self.process_outputs(outputs)
+        processed_output: ContinuousBatchOutput = self.process_outputs(outputs, max_lookahead_tokens=max_lookahead_tokens)
         
         input_ids = processed_output.input_ids
 
@@ -320,7 +324,7 @@ class FoundationPredictor(BasePredictor):
 
         return padded_input_ids, updated_position_ids
 
-    def prefill(self, current_inputs: Optional[ContinuousBatchInput] = None):
+    def prefill(self, current_inputs: Optional[ContinuousBatchInput] = None, max_lookahead_tokens: Optional[int] = None):
         logger.debug(f"Prefilling {self.num_empty_slots} slots")
         prompts: List[FoundationPrompt] = [
             self.prompt_queue.popleft()
@@ -381,7 +385,7 @@ class FoundationPredictor(BasePredictor):
             )
         
         # Process outputs
-        processed_outputs = self.process_outputs(outputs)
+        processed_outputs = self.process_outputs(outputs, max_lookahead_tokens=max_lookahead_tokens)
         # Multi-token prediction
         predicted_tokens = processed_outputs.input_ids.shape[1]
         num_valid_tokens = torch.ones((input_ids.shape[0]), device=self.model.device, dtype=torch.long) * predicted_tokens
@@ -447,6 +451,7 @@ class FoundationPredictor(BasePredictor):
         batch_size: int | None = None,
         math_mode: bool = True,
         drop_repeated_tokens: bool = True,
+        max_lookahead_tokens: Optional[int] = None
     ) -> tuple:
         allowed_tasks = self.tasks.keys()
         assert all([task_name in allowed_tasks for task_name in task_names]), (
@@ -493,7 +498,7 @@ class FoundationPredictor(BasePredictor):
             if (
                 self.num_empty_slots / batch_size
             ) > self.min_prefill_ratio and self.prompt_queue:
-                updated_inputs, outputs, merge_idxs = self.prefill(current_inputs)
+                updated_inputs, outputs, merge_idxs = self.prefill(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
@@ -518,7 +523,7 @@ class FoundationPredictor(BasePredictor):
                                 pbar.update(1)
                                 break
             else:
-                updated_inputs, outputs = self.decode(current_inputs)
+                updated_inputs, outputs = self.decode(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
 
