@@ -47,6 +47,7 @@ class ContinuousBatchOutput:
     preds: torch.Tensor
     bbox_preds: torch.Tensor
     scores: torch.Tensor
+    token_probs: torch.Tensor
 
 
 @dataclass
@@ -201,6 +202,7 @@ class FoundationPredictor(BasePredictor):
             preds=preds,
             bbox_preds=box_preds,
             scores=scores,
+            token_probs=token_probs
         )
 
     # Make space for beacon tokens to be inserted while keeping the same seq len across all batch elements
@@ -451,7 +453,8 @@ class FoundationPredictor(BasePredictor):
         batch_size: int | None = None,
         math_mode: bool = True,
         drop_repeated_tokens: bool = True,
-        max_lookahead_tokens: Optional[int] = None
+        max_lookahead_tokens: Optional[int] = None,
+        top_k: int = 5
     ) -> tuple:
         allowed_tasks = self.tasks.keys()
         assert all([task_name in allowed_tasks for task_name in task_names]), (
@@ -460,6 +463,7 @@ class FoundationPredictor(BasePredictor):
 
         predicted_tokens = [[] for _ in range(len(images))]
         scores = [[] for _ in range(len(images))]
+        topk_probs = [[] for _ in range(len(images))]
 
         if batch_size is None:
             batch_size = self.get_batch_size()
@@ -502,6 +506,7 @@ class FoundationPredictor(BasePredictor):
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
+                token_probs_cpu = outputs.token_probs.cpu()
                 for temp_idx, b_idx in enumerate(merge_idxs):
                     if self.batch_prompt_mapping[b_idx] is not None:
                         p_idx = self.batch_prompt_mapping[b_idx]
@@ -515,6 +520,16 @@ class FoundationPredictor(BasePredictor):
                             batch_pos[p_idx] += 1
                             scores[p_idx].append(scores_cpu[temp_idx, t_idx].item())
 
+                            top_k_probs, top_k_indices = torch.topk(
+                                token_probs_cpu[temp_idx, t_idx], k=top_k, dim=-1
+                            )
+                            top_k_scores = {
+                                top_k_indices[k].item(): top_k_probs[k].item()
+                                for k in range(top_k)
+                            }
+                            topk_probs[p_idx].append(top_k_scores)
+                            print(top_k_scores)
+
                             if token in [
                                 self.processor.eos_token_id,
                                 self.processor.no_output_token,
@@ -526,6 +541,7 @@ class FoundationPredictor(BasePredictor):
                 updated_inputs, outputs = self.decode(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
+                token_probs_cpu = outputs.token_probs.cpu()
 
                 for b_idx, p_idx in self.batch_prompt_mapping.items():
                     if p_idx is not None:
@@ -542,6 +558,16 @@ class FoundationPredictor(BasePredictor):
                             ]
                             batch_pos[p_idx] += 1
                             scores[p_idx].append(scores_cpu[b_idx, t_idx].item())
+
+                            top_k_probs, top_k_indices = torch.topk(
+                                token_probs_cpu[temp_idx, t_idx], k=top_k, dim=-1
+                            )
+                            top_k_scores = {
+                                top_k_indices[k].item(): top_k_probs[k].item()
+                                for k in range(top_k)
+                            }
+                            topk_probs[p_idx].append(top_k_scores)
+                            print(top_k_scores)
 
                             repeats = (
                                 len(predicted_tokens[p_idx]) >= batch_max_tokens[p_idx]
@@ -571,4 +597,4 @@ class FoundationPredictor(BasePredictor):
         self.kv_cache = None
         torch.cuda.empty_cache()
 
-        return predicted_tokens, batch_bboxes, scores
+        return predicted_tokens, batch_bboxes, scores, topk_probs

@@ -43,7 +43,7 @@ class LayoutPredictor(BasePredictor):
         images = convert_if_not_rgb(images)
         images = [self.processor.image_processor(image) for image in images]
 
-        predicted_tokens, batch_bboxes, scores = self.foundation_predictor.prediction_loop(
+        predicted_tokens, batch_bboxes, scores, topk_scores = self.foundation_predictor.prediction_loop(
             images=images,
             input_texts=["" for _ in range(len(images))],
             task_names=[TaskNames.layout for _ in range(len(images))],
@@ -57,22 +57,29 @@ class LayoutPredictor(BasePredictor):
         )
 
         layout_results = []
-        for image, image_tokens, image_polygons, image_scores in zip(images, predicted_tokens, predicted_polygons, scores):
+        for image, image_tokens, image_polygons, image_scores, image_topk_scores in zip(images, predicted_tokens, predicted_polygons, scores, topk_scores):
             layout_boxes = []
-            for z, (tok, poly, score) in enumerate(zip(image_tokens, image_polygons, image_scores)):
+            for z, (tok, poly, score, tok_topk) in enumerate(zip(image_tokens, image_polygons, image_scores, image_topk_scores)):
                 if tok == self.processor.eos_token_id:
                     break
 
                 predicted_label = self.processor.decode([tok], "layout")
                 label = LAYOUT_PRED_RELABEL[predicted_label]
+
+                top_k_dict = {}
+                for k, v in tok_topk.items():
+                    l = self.processor.decode([k], "layout")
+                    if l in LAYOUT_PRED_RELABEL:
+                        l = LAYOUT_PRED_RELABEL[l]
+                    top_k_dict.update({l: v})
                 layout_boxes.append(LayoutBox(
                     polygon=poly.tolist(),
                     label=label,
                     position=z,
-                    top_k={label: score},
+                    top_k=top_k_dict,
                     confidence=score
                 ))
-            layout_boxes = clean_boxes(layout_boxes)
+            # layout_boxes = clean_boxes(layout_boxes)
             layout_results.append(LayoutResult(
                 bboxes=layout_boxes,
                 image_bbox=[0, 0, *image.shape]

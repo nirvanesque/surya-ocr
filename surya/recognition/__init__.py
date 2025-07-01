@@ -414,7 +414,7 @@ class RecognitionPredictor(BasePredictor):
         flat["task_names"] = [flat["task_names"][i] for i in indices]
 
         # Make predictions
-        predicted_tokens, batch_bboxes, scores = self.foundation_predictor.prediction_loop(
+        predicted_tokens, batch_bboxes, scores, _ = self.foundation_predictor.prediction_loop(
             flat["slices"], flat["input_text"], flat["task_names"], batch_size=recognition_batch_size, math_mode=math_mode, drop_repeated_tokens=True
         )
 
