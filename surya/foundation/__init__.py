@@ -369,7 +369,6 @@ class FoundationPredictor(BasePredictor):
             input_ids = self.pad_to_batch_size(input_ids, batch_size=self.kv_cache.max_batch_size)
             attention_mask = self.pad_to_batch_size(attention_mask, batch_size=self.kv_cache.max_batch_size)
             position_ids = self.pad_to_batch_size(position_ids, batch_size=self.kv_cache.max_batch_size)
-            print(input_ids.shape, attention_mask.shape, position_ids.shape)
 
         # Find text lengths of each
         is_special = (input_ids.unsqueeze(-1) == self.special_token_ids).any(-1)  # (batch, seq_len)
