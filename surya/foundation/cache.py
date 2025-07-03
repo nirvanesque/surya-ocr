@@ -266,3 +266,8 @@ class ContinuousBatchingCache(StaticCache):
         self.value_cache[layer_idx] = v_cache
 
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+    # This is used by HF models to determine the causal relationship between new tokens and cache
+    # Our cache is left padded - So all tokens should always be visible to new tokens
+    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+        return self.max_cache_len

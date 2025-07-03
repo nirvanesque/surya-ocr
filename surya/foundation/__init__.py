@@ -254,6 +254,9 @@ class FoundationPredictor(BasePredictor):
         return new_input_ids, valid_token_counts
 
     def decode(self, current_inputs: Optional[ContinuousBatchInput] = None, max_lookahead_tokens: Optional[int] = None):
+        # Note - If we want to use the outputs from the non-last token, we 
+        # need to set the cache position manually to ensure causality. The default
+        # behavior only works for the last token currently
         input_ids = current_inputs.input_ids
         position_ids = current_inputs.position_ids
         num_predicted_tokens = current_inputs.num_predicted_tokens
