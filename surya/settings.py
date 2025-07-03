@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     COMPILE_DETECTOR: bool = False
 
     # Text recognition
-    FOUNDATION_MODEL_CHECKPOINT: str = "datalab-to/foundation-2.9"
+    FOUNDATION_MODEL_CHECKPOINT: str = "datalab-to/foundation-2.10"
     FOUNDATION_MODEL_QUANTIZE: bool = False
     FOUNDATION_MAX_TOKENS: Optional[int] = None
     RECOGNITION_CHUNK_SIZE: Optional[int] = None

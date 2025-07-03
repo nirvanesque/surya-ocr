@@ -528,7 +528,6 @@ class FoundationPredictor(BasePredictor):
                                 for k in range(top_k)
                             }
                             topk_probs[p_idx].append(top_k_scores)
-                            print(top_k_scores)
 
                             if token in [
                                 self.processor.eos_token_id,
@@ -547,10 +546,8 @@ class FoundationPredictor(BasePredictor):
                     if p_idx is not None:
                         seq_len = predicted_tokens_cpu.shape[1]
                         should_stop = False
-                        # print(seq_len)
 
                         for t_idx in range(seq_len):
-                            # print(b_idx, t_idx)
                             token = predicted_tokens_cpu[b_idx, t_idx].item()
                             predicted_tokens[p_idx].append(token)
                             batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
@@ -567,7 +564,6 @@ class FoundationPredictor(BasePredictor):
                                 for k in range(top_k)
                             }
                             topk_probs[p_idx].append(top_k_scores)
-                            print(top_k_scores)
 
                             repeats = (
                                 len(predicted_tokens[p_idx]) >= batch_max_tokens[p_idx]
