@@ -79,7 +79,8 @@ class Settings(BaseSettings):
     FOUNDATION_MODEL_CHECKPOINT: str = "datalab-to/foundation-2.10"
     FOUNDATION_MODEL_QUANTIZE: bool = False
     FOUNDATION_MAX_TOKENS: Optional[int] = None
-    RECOGNITION_CHUNK_SIZE: Optional[int] = None
+    FOUNDATION_CHUNK_SIZE: Optional[int] = None
+    COMPILE_FOUNDATION: bool = False
 
     RECOGNITION_BATCH_SIZE: Optional[int] = (
         None  # Defaults to 8 for CPU/MPS, 256 otherwise
@@ -131,10 +132,12 @@ class Settings(BaseSettings):
         )  # We need to static cache and pad to batch size for XLA, since it will recompile otherwise
 
     @computed_field
-    def LAYOUT_STATIC_CACHE(self) -> bool:
+    def FOUNDATION_STATIC_CACHE(self) -> bool:
         return (
-            self.COMPILE_ALL or self.COMPILE_LAYOUT or self.TORCH_DEVICE_MODEL == "xla"
-        )
+            self.COMPILE_ALL
+            or self.COMPILE_FOUNDATION
+            or self.TORCH_DEVICE_MODEL == "xla"
+        )  # We need to static cache and pad to batch size for XLA, since it will recompile otherwise
 
     @computed_field
     def TABLE_REC_STATIC_CACHE(self) -> bool:

@@ -111,9 +111,11 @@ class FoundationPredictor(BasePredictor):
             device=self.model.device,
         )
 
+        self.pad_to_multiple = 512 if settings.FOUNDATION_STATIC_CACHE else None
+
     def get_encoder_chunk_size(self) -> int:
-        if settings.RECOGNITION_CHUNK_SIZE is not None:
-            return settings.RECOGNITION_CHUNK_SIZE
+        if settings.FOUNDATION_CHUNK_SIZE is not None:
+            return settings.FOUNDATION_CHUNK_SIZE
 
         chunk_size = self.encoder_chunk_size
         if settings.TORCH_DEVICE_MODEL in self.encoder_chunk_sizes:
@@ -352,9 +354,8 @@ class FoundationPredictor(BasePredictor):
                 p.math_mode for p in prompts
             ],  # Pass math mode to the processor
         )
-        # Padding the inputs to max cache len to keep the static shape
         processed_inputs = self.processor(
-            batch_input, padding_side="left", device=self.model.device, pad_to_max_len=self.kv_cache.max_cache_len
+            batch_input, padding_side="left", device=self.model.device, pad_to_multiple=self.pad_to_multiple
         ).to(device=self.model.device)
 
         # TODO pad these to max batch size - Maybe not required for now
