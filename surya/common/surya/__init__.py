@@ -243,6 +243,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 grid_thw=grid_thw,
                 encoder_chunk_size=encoder_chunk_size,
             )
+            print(image_features.shape)
 
             special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
             special_image_mask = special_image_mask.expand_as(inputs_embeds)

@@ -442,6 +442,8 @@ class SuryaOCRProcessor(S3DownloaderMixin, ProcessorMixin):
             batched_input_ids = batched_input_ids.pin_memory()
             position_ids = position_ids.pin_memory()
 
+        print([t.shape for t in [batched_image_tiles, batched_grid_thw, attention_mask, batched_input_ids, position_ids]])
+
         return BatchFeature(
             {
                 "input_ids": batched_input_ids,

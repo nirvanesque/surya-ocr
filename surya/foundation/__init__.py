@@ -358,12 +358,18 @@ class FoundationPredictor(BasePredictor):
             batch_input, padding_side="left", device=self.model.device, pad_to_multiple=self.pad_to_multiple
         ).to(device=self.model.device)
 
-        # TODO pad these to max batch size - Maybe not required for now
         input_ids = processed_inputs["input_ids"].to(dtype=torch.long)
         image_tiles = processed_inputs["image_tiles"].to(dtype=self.model.dtype)
         grid_thw = processed_inputs["grid_thw"].to(dtype=torch.long)
         attention_mask = processed_inputs["attention_mask"].to(dtype=torch.long)
         position_ids = processed_inputs["position_ids"].to(dtype=torch.long)
+        valid_batch_size = len(idxs_to_merge)
+
+        if settings.FOUNDATION_STATIC_CACHE:
+            input_ids = self.pad_to_batch_size(input_ids, batch_size=self.kv_cache.max_batch_size)
+            attention_mask = self.pad_to_batch_size(attention_mask, batch_size=self.kv_cache.max_batch_size)
+            position_ids = self.pad_to_batch_size(position_ids, batch_size=self.kv_cache.max_batch_size)
+            print(input_ids.shape, attention_mask.shape, position_ids.shape)
 
         # Find text lengths of each
         is_special = (input_ids.unsqueeze(-1) == self.special_token_ids).any(-1)  # (batch, seq_len)
@@ -401,8 +407,8 @@ class FoundationPredictor(BasePredictor):
         num_valid_tokens = torch.ones((input_ids.shape[0]), device=self.model.device, dtype=torch.long) * predicted_tokens
         num_predicted_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device, dtype=torch.long) * predicted_tokens
 
-        self.kv_cache.prefill_attention_mask_update(attention_mask, idxs_to_merge, text_lengths)
-        self.kv_cache.update_text_counts(idxs_to_merge, text_lengths)
+        self.kv_cache.prefill_attention_mask_update(attention_mask, idxs_to_merge, text_lengths[:valid_batch_size])
+        self.kv_cache.update_text_counts(idxs_to_merge, text_lengths[:valid_batch_size])
 
         if current_inputs is None:
             new_seq_len = processed_outputs.input_ids.shape[1]
@@ -429,14 +435,14 @@ class FoundationPredictor(BasePredictor):
         input_ids, position_ids = self.pad_and_shift_input_ids_position_ids(
             processed_outputs.input_ids, position_ids, new_seq_len=current_input_ids.shape[1]
         )
-        current_input_ids[idxs_to_merge] = input_ids
-        current_position_ids[idxs_to_merge] = position_ids
+        current_input_ids[idxs_to_merge] = input_ids[:valid_batch_size]
+        current_position_ids[idxs_to_merge] = position_ids[:valid_batch_size]
 
         current_num_valid_tokens = current_inputs.num_valid_tokens
-        current_num_valid_tokens[idxs_to_merge] = num_valid_tokens
+        current_num_valid_tokens[idxs_to_merge] = num_valid_tokens[:valid_batch_size]
 
         current_num_predicted_tokens = current_inputs.num_predicted_tokens
-        current_num_predicted_tokens[idxs_to_merge] = num_predicted_tokens
+        current_num_predicted_tokens[idxs_to_merge] = num_predicted_tokens[:valid_batch_size]
 
         new_input = ContinuousBatchInput(
             input_ids=current_input_ids,
