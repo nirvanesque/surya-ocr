@@ -1,4 +1,4 @@
-from typing import Optional, TypedDict
+from typing import Optional, Tuple, TypedDict
 import warnings
 from dataclasses import dataclass
 
@@ -15,6 +15,7 @@ from surya.common.surya.config import SuryaModelConfig
 from surya.common.surya.decoder import SuryaDecoderModel
 from surya.common.surya.embedder import SimpleTokenEmbedder
 from surya.common.surya.encoder import SuryaEncoderModel
+from surya.settings import settings
 
 from transformers.utils import is_flash_attn_2_available
 
@@ -160,6 +161,34 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     def set_input_embeddings(self, new_embeddings: nn.Module):
         self.embedder.token_embed = new_embeddings
 
+    def maybe_static_pad_image_inputs(
+        self,
+        chunk_pixels: torch.Tensor,
+        chunk_grid_thw: torch.Tensor,
+        actual_chunk_len: int,
+        encoder_chunk_size: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        valid_embed_len = actual_chunk_len // (self.vision_encoder.spatial_merge_size ** 2)
+        if settings.FOUNDATION_STATIC_CACHE and actual_chunk_len < encoder_chunk_size:
+            padding_len = encoder_chunk_size - actual_chunk_len
+            padding = torch.zeros(
+                padding_len, 
+                *chunk_pixels.shape[1:],
+                device=chunk_pixels.device,
+                dtype=chunk_pixels.dtype
+            )
+            chunk_pixels = torch.cat([chunk_pixels, padding], dim=0)
+            
+            padding_grid = torch.tensor(
+                [[1, 2, padding_len // 2]],
+                device=chunk_grid_thw.device,
+                dtype=chunk_grid_thw.dtype
+            )
+            chunk_grid_thw = torch.cat([chunk_grid_thw, padding_grid], dim=0)
+
+        return chunk_pixels, chunk_grid_thw, valid_embed_len
+
+
     def get_image_embeddings(
         self,
         pixel_values: torch.Tensor,
@@ -196,11 +225,17 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             end = chunks[i + 1]
             grid_start = grid_chunks[i]
             grid_end = grid_chunks[i + 1]
+            
+            chunk_pixels = pixel_values[start:end]
+            chunk_grid_thw = grid_thw[grid_start:grid_end]
+            actual_chunk_len = end - start
+            chunk_pixels, chunk_grid_thw, valid_embed_len = self.maybe_static_pad_image_inputs(chunk_pixels, chunk_grid_thw, actual_chunk_len, encoder_chunk_size)
+
             chunk_embeddings = self.vision_encoder.embed_images(
-                image_batch=pixel_values[start:end],
-                grid_thw=grid_thw[grid_start:grid_end],
+                image_batch=chunk_pixels,
+                grid_thw=chunk_grid_thw
             )
-            embeddings.append(chunk_embeddings)
+            embeddings.append(chunk_embeddings[:valid_embed_len])
 
         if len(embeddings) == 0:
             raise ValueError(
@@ -243,7 +278,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 grid_thw=grid_thw,
                 encoder_chunk_size=encoder_chunk_size,
             )
-            print(image_features.shape)
 
             special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
             special_image_mask = special_image_mask.expand_as(inputs_embeds)
