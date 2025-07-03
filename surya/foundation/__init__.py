@@ -247,9 +247,11 @@ class FoundationPredictor(BasePredictor):
                 new_input_ids[i, 1:] = input_ids[i, :]
         
         # Calculate valid token counts for both padded and non padded sequences
-        valid_token_counts = torch.where(needs_beacon, 
-                                    torch.tensor(seq_len + 1, device=input_ids.device),
-                                    torch.tensor(seq_len, device=input_ids.device))
+        valid_token_counts = torch.where(
+            needs_beacon, 
+            torch.tensor(seq_len + 1, device=input_ids.device),
+            torch.tensor(seq_len, device=input_ids.device)
+        )
         
         return new_input_ids, valid_token_counts
 
@@ -282,16 +284,16 @@ class FoundationPredictor(BasePredictor):
         
         input_ids = processed_output.input_ids
 
-        batch_indices = torch.arange(batch_size, device=position_ids.device)
-        last_token_indices = (num_valid_tokens - 1)
-        last_valid_positions = position_ids[batch_indices, last_token_indices].reshape(batch_size, 1)
-
-        # We calculate this **before inserting beacons** to get the number of real tokens predicted
-        # Update the number after insertion since this makes the insertion logic a lot simpelr
+        # Update this **before** inserting beacon tokens
         num_new_tokens = input_ids.shape[1]
-        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
         num_predicted_tokens += num_new_tokens
-        position_ids = last_valid_positions + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
+
+        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
+        position_ids = position_ids[:, -1:] + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
+        # Some of the input sequences may now have left padding tokens, so we want to account for that
+        # offset is a per-batch offset of the position_ids
+        offset = (input_ids.shape[1] - num_valid_tokens).unsqueeze(1)
+        position_ids -= offset
 
         new_input = ContinuousBatchInput(
             input_ids=input_ids,
@@ -309,23 +311,25 @@ class FoundationPredictor(BasePredictor):
         new_seq_len: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Pads new_input_ids to match the new seq len
-        and creates updated position_ids based on current_position_ids' last position.
+        Pads new_input_ids to match the new seq len with **left padding**
+        and creates updated position_ids
 
         Returns:
             padded_input_ids (torch.Tensor): [batch_size, current_seq_len]
             updated_position_ids (torch.Tensor): [batch_size, current_seq_len]
         """
-        assert input_ids.shape[1] == 1, "During prefill the new input_ids must be of length 1"
-
+        # No padding
         if new_seq_len == input_ids.shape[1]:
-            return input_ids, position_ids[:, -1:] + 1
+            return input_ids, position_ids[:, -1:] + torch.arange(1, new_seq_len +1, device=self.model.device)
 
-        pad_len = new_seq_len - 1
-        padded_input_ids = torch.nn.functional.pad(input_ids, (0, pad_len), value=self.device_pad_token)
+        pad_len = new_seq_len - input_ids.shape[1]
+        padded_input_ids = torch.nn.functional.pad(input_ids, (pad_len, 0), value=self.device_pad_token)
 
-        # Create updated position_ids starting from the last position + 1, increasing by 1 each step
+        # Since we have **left padding**, offset the new position_ids by the amount of padding
+        # This ensures that the **true tokens** get the correct position_ids
+        # The position_ids assigned to pad tokens do not matter. They are not cached, and not used for outputs
         updated_position_ids = position_ids[:, -1:] + torch.arange(1, new_seq_len + 1, device=self.model.device)
+        updated_position_ids -= pad_len
 
         return padded_input_ids, updated_position_ids
 
@@ -401,6 +405,7 @@ class FoundationPredictor(BasePredictor):
 
         if current_inputs is None:
             new_seq_len = processed_outputs.input_ids.shape[1]
+            # No padding tokens - So we can safely set position_ids this way
             position_ids = position_ids[:, -1:] + torch.arange(1, new_seq_len + 1, device=position_ids.device)
             new_input = ContinuousBatchInput(
                 input_ids=processed_outputs.input_ids,
@@ -419,6 +424,7 @@ class FoundationPredictor(BasePredictor):
         current_input_ids = current_inputs.input_ids
         current_position_ids = current_inputs.position_ids
 
+        assert(current_input_ids.shape[1] == current_position_ids.shape[1])
         input_ids, position_ids = self.pad_and_shift_input_ids_position_ids(
             processed_outputs.input_ids, position_ids, new_seq_len=current_input_ids.shape[1]
         )
