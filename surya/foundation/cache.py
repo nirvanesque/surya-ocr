@@ -45,12 +45,6 @@ class ContinuousBatchingCache(StaticCache):
         self.dtype = dtype
         self.device = device
 
-    def _shift_attention_mask_left(self, batch_idx: int, shift_amount: int):
-        self.attention_mask[batch_idx, :-shift_amount] = self.attention_mask[
-            batch_idx, shift_amount:
-        ].clone()
-        self.attention_mask[batch_idx, -shift_amount:] = 1
-
     def update(
         self,
         key_states: torch.Tensor,
@@ -84,10 +78,12 @@ class ContinuousBatchingCache(StaticCache):
     """
 
     def maybe_shift_attention_mask(
-        self, num_valid_tokens: List[int], cache_idxs: List[int]
+        self, num_valid_tokens: torch.Tensor, cache_idxs: List[int]
     ):
+        shift_amounts = [0] * len(cache_idxs)
+        num_valid_tokens_list = num_valid_tokens.tolist()
         for batch_idx, cache_idx in enumerate(cache_idxs):
-            new_text_len = num_valid_tokens[batch_idx]
+            new_text_len = num_valid_tokens_list[batch_idx]
             if new_text_len == 0:
                 continue  # skip padded batch entry
 
@@ -98,14 +94,36 @@ class ContinuousBatchingCache(StaticCache):
                 # If we are under the sliding window length, shift the entire cache left
                 # Since we setup the max cache length with enough buffer, this will ONLY drop
                 # left padding tokens out
-                shift = new_text_len
-                self._shift_attention_mask_left(cache_idx, shift)
+                shift_amounts[batch_idx] = new_text_len
             else:
                 # Shift entire cache left to make room for full text sliding window
-                shift_amount = self.text_sliding_window - curr_text_cache_len
                 # If this is <=0, we are already above the sliding window, so the attention mask stays the same
-                if shift_amount > 0:
-                    self._shift_attention_mask_left(cache_idx, shift_amount)
+                shift_amounts[batch_idx] = (
+                    self.text_sliding_window - curr_text_cache_len
+                )
+
+        self._shift_attention_matrix_left(shift_amounts)
+
+    def _shift_attention_matrix_left(self, shifts: List[int]):
+        batch_size, seq_len = self.attention_mask.shape
+        shifts_tensor = torch.tensor(shifts, device=self.attention_mask.device)
+
+        # Create index tensor for gathering
+        indices = (
+            torch.arange(seq_len, device=self.attention_mask.device)
+            .unsqueeze(0)
+            .expand(batch_size, -1)
+        )
+        shifted_indices = (indices + shifts_tensor.unsqueeze(1)).clamp(0, seq_len - 1)
+
+        # Gather values and create mask for valid positions
+        new_attention_mask = torch.gather(self.attention_mask, 1, shifted_indices)
+
+        # Set positions beyond original length to 1
+        valid_mask = indices < (seq_len - shifts_tensor.unsqueeze(1))
+        new_attention_mask = torch.where(valid_mask, new_attention_mask, 1)
+
+        self.attention_mask = new_attention_mask
 
     # Mirrors the logic from _prefill_update
     def prefill_attention_mask_update(
@@ -244,7 +262,6 @@ class ContinuousBatchingCache(StaticCache):
         num_valid_tokens: torch.Tensor = cache_kwargs.get(
             "num_valid_tokens"
         )  # shape: (B,)
-        num_valid_tokens_list = num_valid_tokens.tolist()
         assert num_valid_tokens is not None, (
             "`num_valid_tokens` must be provided in `cache_kwargs`"
         )
@@ -255,6 +272,7 @@ class ContinuousBatchingCache(StaticCache):
         k_cache = self.key_cache[layer_idx]  # (B, H, L, D)
         v_cache = self.value_cache[layer_idx]  # (B, H, L, D)
 
+        num_valid_tokens_list = num_valid_tokens.tolist()
         for batch_idx, cache_idx in enumerate(cache_idxs):
             new_text_len = num_valid_tokens_list[batch_idx]
             if new_text_len == 0:

@@ -244,13 +244,7 @@ class FoundationPredictor(BasePredictor):
                 batch_size, dtype=torch.long, device=input_ids.device
             ) * seq_len
 
-        beacon_insert_pos = torch.zeros(
-            batch_size, dtype=torch.long, device=input_ids.device
-        )
-        for i in range(batch_size):
-            if needs_beacon[i]:
-                # Find first position that needs beacon
-                beacon_insert_pos[i] = torch.where(beacon_positions[i])[0]
+        beacon_insert_pos = torch.argmax(beacon_positions.float(), dim=1)
 
         # Padded input ids.
         new_input_ids = torch.full(
@@ -260,22 +254,40 @@ class FoundationPredictor(BasePredictor):
             device=input_ids.device,
         )
 
-        # Fill in tokens for each sequence
-        for i in range(batch_size):
-            if needs_beacon[i]:
-                insert_pos = beacon_insert_pos[i]
-                new_input_ids[i, insert_pos] = self.device_beacon_token
-                if insert_pos > 0:
-                    new_input_ids[i, :insert_pos] = input_ids[i, :insert_pos]
-                new_input_ids[i, insert_pos + 1 :] = input_ids[i, insert_pos:]
-            else:
-                new_input_ids[i, 1:] = input_ids[i, :]
+        # Create indices for vectorized operations
+        batch_indices = torch.arange(batch_size, device=input_ids.device).unsqueeze(1)
+        seq_indices = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
+
+        # Calculate target positions for each token
+        # For sequences with beacons: tokens at pos >= beacon_insert_pos get shifted by +1
+        # For sequences without beacons: all tokens get shifted by +1 (start at position 1)
+        beacon_pos_expanded = beacon_insert_pos.unsqueeze(1)
+        needs_beacon_expanded = needs_beacon.unsqueeze(1)
+
+        # Calculate shift amount for each position
+        shift_amount = torch.where(
+            needs_beacon_expanded,
+            (
+                seq_indices >= beacon_pos_expanded
+            ).long(),  # Shift by 1 if pos >= beacon_pos
+            torch.ones_like(
+                seq_indices
+            ),  # Shift by 1 for all positions (no beacon case)
+        )
+
+        target_positions = seq_indices + shift_amount
+
+        # Use advanced indexing to place all tokens at once
+        new_input_ids[batch_indices, target_positions] = input_ids
+
+        # Insert beacon tokens at the correct positions
+        new_input_ids[needs_beacon, beacon_insert_pos[needs_beacon]] = (
+            self.device_beacon_token
+        )
 
         # Calculate valid token counts for both padded and non padded sequences
-        valid_token_counts = torch.where(
-            needs_beacon,
-            torch.tensor(seq_len + 1, device=input_ids.device),
-            torch.tensor(seq_len, device=input_ids.device),
+        valid_token_counts = torch.where(needs_beacon, seq_len + 1, seq_len).to(
+            dtype=torch.long, device=input_ids.device
         )
 
         return new_input_ids, valid_token_counts
@@ -509,7 +521,8 @@ class FoundationPredictor(BasePredictor):
         current_position_ids[idxs_to_merge] = position_ids[:valid_batch_size]
 
         current_num_valid_tokens = current_inputs.num_valid_tokens
-        current_num_valid_tokens[idxs_to_merge] = num_valid_tokens[:valid_batch_size]
+        for i, idx_to_merge in enumerate(idxs_to_merge):
+            current_num_valid_tokens[idx_to_merge] = num_valid_tokens[i]
 
         current_num_predicted_tokens = current_inputs.num_predicted_tokens
         current_num_predicted_tokens[idxs_to_merge] = num_predicted_tokens[
@@ -556,7 +569,6 @@ class FoundationPredictor(BasePredictor):
         if batch_size is None:
             batch_size = self.get_batch_size()
 
-        batch_size = min(len(images), batch_size)
         current_inputs = None
 
         max_image_tokens = max(
@@ -602,6 +614,7 @@ class FoundationPredictor(BasePredictor):
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 token_probs_cpu = outputs.token_probs.cpu()
+
                 for temp_idx, b_idx in enumerate(merge_idxs):
                     if self.batch_prompt_mapping[b_idx] is not None:
                         p_idx = self.batch_prompt_mapping[b_idx]
@@ -609,6 +622,8 @@ class FoundationPredictor(BasePredictor):
                         for t_idx in range(seq_len):
                             token = predicted_tokens_cpu[temp_idx, t_idx].item()
                             predicted_tokens[p_idx].append(token)
+
+                            # Keep on GPU for later postprocessing
                             batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
                                 temp_idx, t_idx
                             ]
@@ -636,6 +651,7 @@ class FoundationPredictor(BasePredictor):
                     current_inputs, max_lookahead_tokens=max_lookahead_tokens
                 )
                 mark_step()
+
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 token_probs_cpu = outputs.token_probs.cpu()
@@ -648,6 +664,8 @@ class FoundationPredictor(BasePredictor):
                         for t_idx in range(seq_len):
                             token = predicted_tokens_cpu[b_idx, t_idx].item()
                             predicted_tokens[p_idx].append(token)
+
+                            # Keep on GPU for later postprocessing
                             batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
                                 b_idx, t_idx
                             ]

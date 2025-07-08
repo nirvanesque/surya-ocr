@@ -22,6 +22,7 @@ import datasets
 import json
 import time
 from tabulate import tabulate
+import torch_xla.debug.metrics as met
 
 KEY_LANGUAGES = [
     "Chinese",
@@ -351,6 +352,8 @@ def main(
             image.save(os.path.join(result_path, f"{'_'.join(lang)}_{idx}_image.png"))
 
     print(f"Wrote results to {result_path}")
+    print(met.short_metrics_report())
+    print(met.metrics_report())
 
 
 if __name__ == "__main__":

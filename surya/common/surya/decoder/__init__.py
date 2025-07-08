@@ -14,14 +14,11 @@ from transformers.modeling_outputs import (
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
-from transformers.utils import (
-    logging,
-)
 from surya.common.surya.decoder.config import SuryaDecoderConfig
 
 from transformers.utils import is_flash_attn_2_available
 
-from surya.common.xla import mark_step
+from surya.logging import get_logger
 
 if is_flash_attn_2_available():
     from surya.common.surya.flash_attn_utils import (
@@ -29,7 +26,7 @@ if is_flash_attn_2_available():
         flash_attn_prefill,
     )
 
-logger = logging.get_logger(__name__)
+logger = get_logger()
 
 
 class Qwen2MLP(nn.Module):
@@ -498,6 +495,7 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
 
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        logger.debug(f"Decoder hidden size: {hidden_states.shape}, ")
 
         # decoder layers
         for i in range(self.config.num_hidden_layers):
@@ -520,7 +518,6 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
             )
 
             hidden_states = layer_outputs[0]
-            mark_step()
 
         hidden_states = self.norm(hidden_states)
 

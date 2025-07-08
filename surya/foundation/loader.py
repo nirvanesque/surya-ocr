@@ -55,9 +55,10 @@ class FoundationModelLoader(ModelLoader):
 
         if settings.COMPILE_ALL or settings.COMPILE_FOUNDATION:
             torch.set_float32_matmul_precision("high")
-            torch._dynamo.config.cache_size_limit = 16
+            torch._dynamo.config.cache_size_limit = 1000
             torch._dynamo.config.suppress_errors = False
             torch._dynamo.config.specialize_int = False
+            torch._dynamo.config.recompile_limit = 32
 
             logger.info(
                 f"Compiling foundation model {self.checkpoint} on device {device} with dtype {dtype}"

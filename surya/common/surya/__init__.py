@@ -15,6 +15,7 @@ from surya.common.surya.config import SuryaModelConfig
 from surya.common.surya.decoder import SuryaDecoderModel
 from surya.common.surya.embedder import SimpleTokenEmbedder
 from surya.common.surya.encoder import SuryaEncoderModel
+from surya.common.xla import mark_step
 from surya.settings import settings
 
 from transformers.utils import is_flash_attn_2_available
@@ -244,6 +245,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             chunk_embeddings = self.vision_encoder.embed_images(
                 image_batch=chunk_pixels, grid_thw=chunk_grid_thw
             )
+            mark_step()
             embeddings.append(chunk_embeddings[:valid_embed_len])
 
         if len(embeddings) == 0:
@@ -314,7 +316,8 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         bbox_size: int = 256,
     ):
         all_embeddings = []
-        for grid_t, grid_h, grid_w in grid_thw:
+        grid_thw_list = grid_thw.tolist()
+        for grid_t, grid_h, grid_w in grid_thw_list:
             llm_grid_h, llm_grid_w = (
                 grid_h // self.config.merge_size,
                 grid_w // self.config.merge_size,
