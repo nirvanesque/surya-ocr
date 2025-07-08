@@ -12,7 +12,6 @@ from PIL import Image
 from tqdm import tqdm
 import torch.nn.functional as F
 
-from surya.common.surya import SuryaModelOutput
 from surya.common.xla import mark_step
 from surya.common.predictor import BasePredictor
 
@@ -113,7 +112,11 @@ class FoundationPredictor(BasePredictor):
             device=self.model.device,
         )
 
-        self.pad_to_multiple = 512 if settings.FOUNDATION_STATIC_CACHE else None
+        self.pad_to_multiple = (
+            settings.FOUNDATION_PAD_TO_NEAREST
+            if settings.FOUNDATION_STATIC_CACHE
+            else None
+        )
 
     def get_encoder_chunk_size(self) -> int:
         if settings.FOUNDATION_CHUNK_SIZE is not None:
@@ -187,7 +190,7 @@ class FoundationPredictor(BasePredictor):
         return batch
 
     def process_outputs(
-        self, outputs: SuryaModelOutput, max_lookahead_tokens: Optional[int] = None
+        self, outputs, max_lookahead_tokens: Optional[int] = None
     ) -> ContinuousBatchOutput:
         # Predictions are multi-token
         lm_logits = outputs["lm_logits"].float()  # shape: [batch_size, seq_len, V]
@@ -567,7 +570,11 @@ class FoundationPredictor(BasePredictor):
         topk_probs = [[] for _ in range(len(images))]
 
         if batch_size is None:
-            batch_size = self.get_batch_size()
+            batch_size = (
+                self.get_batch_size()
+                if settings.FOUNDATION_STATIC_CACHE
+                else len(images)
+            )
 
         current_inputs = None
 

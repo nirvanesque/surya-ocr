@@ -456,6 +456,9 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         )
 
         attention_mask = causal_mask
+        logger.debug(
+            f"Running decoder with attention mask shape: {attention_mask.shape}"
+        )
         outputs = self.decoder(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,

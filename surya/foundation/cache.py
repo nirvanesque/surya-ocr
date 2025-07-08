@@ -14,157 +14,73 @@ Heavily inspired from https://github.com/huggingface/transformers/blob/0725cd695
 """
 
 
-class ContinuousBatchingCache(StaticCache):
+class ContinuousBatchingLayerCache(StaticCache):
     def __init__(
         self,
         config: PretrainedConfig,
         batch_size: int,
         max_cache_len: int,
         text_sliding_window: int,
-        device: int,
-        dtype: int,
+        device: torch.device,
+        dtype: torch.dtype,
     ):
-        # batch_size is deprecated in newer versions
-        super().__init__(
-            config,
-            max_cache_len=max_cache_len,
-            device=device,
-            dtype=dtype,
-            max_batch_size=batch_size,
-        )
-        self.text_sliding_window = text_sliding_window
-        self.num_layers = config.num_hidden_layers
+        # No need for the super class call, it just overwrites the caches
+        # At some point, we should consider not inheriting from StaticCache
+        self.max_cache_len = max_cache_len
+        self.max_batch_size = batch_size
 
-        self.attention_mask = torch.zeros(
-            (self.max_batch_size, self.max_cache_len), device=device, dtype=torch.long
+        self.head_dim = (
+            getattr(config, "head_dim", None)
+            or config.hidden_size // config.num_attention_heads
         )
-        self.text_token_counts = [
-            [0] * self.max_batch_size for _ in range(self.num_layers)
-        ]
+        self.num_key_value_heads = (
+            config.num_attention_heads
+            if getattr(config, "num_key_value_heads", None) is None
+            else config.num_key_value_heads
+        )
+
+        cache_shape = (
+            self.max_batch_size,
+            self.num_key_value_heads,
+            self.max_cache_len,
+            self.head_dim,
+        )
+        self.key_cache = torch.zeros(cache_shape, dtype=dtype, device=device)
+        self.value_cache = torch.zeros(cache_shape, dtype=dtype, device=device)
+
+        self.text_sliding_window = text_sliding_window
+        self.text_token_counts = [0] * self.max_batch_size
 
         self.dtype = dtype
         self.device = device
+
+    # This is used by HF models to determine the causal relationship between new tokens and cache
+    # Our cache is left padded - So all tokens should always be visible to new tokens
+    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+        return self.max_cache_len
 
     def update(
         self,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        layer_idx: torch.Tensor,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # layer_idx tensor -> int is needed here for compile
         prefill = cache_kwargs.get("prefill", False)
-        layer_idx_item = layer_idx[0]
         if prefill:
             return self._prefill_update(
-                self.key_cache[layer_idx_item],
-                self.value_cache[layer_idx_item],
+                self.key_cache,
+                self.value_cache,
                 key_states,
                 value_states,
                 cache_kwargs,
             )
         else:
-            return self._decode_update(
-                key_states, value_states, layer_idx, cache_kwargs
-            )
+            return self._decode_update(key_states, value_states, cache_kwargs)
 
     def update_text_counts(self, cache_idxs: List[int], new_text_lens: List[int]):
         assert len(cache_idxs) == len(new_text_lens)
-        for layer_idx in range(self.num_layers):
-            for i, cache_idx in enumerate(cache_idxs):
-                self.text_token_counts[layer_idx][cache_idx] = new_text_lens[i]
-
-    """
-    This matches the implemenation of the cache update, but needs to be called before the first
-    cache update since the attention mask is used for other operations before the cache update
-    """
-
-    def maybe_shift_attention_mask(
-        self, num_valid_tokens: torch.Tensor, cache_idxs: List[int]
-    ):
-        shift_amounts = [0] * len(cache_idxs)
-        num_valid_tokens_list = num_valid_tokens.tolist()
-        for batch_idx, cache_idx in enumerate(cache_idxs):
-            new_text_len = num_valid_tokens_list[batch_idx]
-
-            # Same token counts for all layers when we start, so we take 0th
-            curr_text_cache_len = self.text_token_counts[0][cache_idx]
-
-            if curr_text_cache_len + new_text_len <= self.text_sliding_window:
-                # If we are under the sliding window length, shift the entire cache left
-                # Since we setup the max cache length with enough buffer, this will ONLY drop
-                # left padding tokens out
-                shift_amounts[batch_idx] = new_text_len
-            else:
-                # Shift entire cache left to make room for full text sliding window
-                # If this is <=0, we are already above the sliding window, so the attention mask stays the same
-                shift_amounts[batch_idx] = (
-                    self.text_sliding_window - curr_text_cache_len
-                )
-
-        self._shift_attention_matrix_left(shift_amounts)
-
-    def _shift_attention_matrix_left(self, shifts: List[int]):
-        batch_size, seq_len = self.attention_mask.shape
-        shifts_tensor = torch.tensor(shifts, device=self.attention_mask.device)
-
-        # Create index tensor for gathering
-        indices = (
-            torch.arange(seq_len, device=self.attention_mask.device)
-            .unsqueeze(0)
-            .expand(batch_size, -1)
-        )
-        shifted_indices = (indices + shifts_tensor.unsqueeze(1)).clamp(0, seq_len - 1)
-
-        # Gather values and create mask for valid positions
-        new_attention_mask = torch.gather(self.attention_mask, 1, shifted_indices)
-
-        # Set positions beyond original length to 1
-        valid_mask = indices < (seq_len - shifts_tensor.unsqueeze(1))
-        new_attention_mask = torch.where(valid_mask, new_attention_mask, 1)
-
-        self.attention_mask = new_attention_mask
-
-    # Mirrors the logic from _prefill_update
-    def prefill_attention_mask_update(
-        self,
-        attention_mask: torch.Tensor,
-        cache_idxs: List[int],
-        text_lengths: List[int],
-    ):
-        seq_len = attention_mask.shape[1]
-
-        for batch_idx, cache_idx in enumerate(cache_idxs):
-            text_len = text_lengths[batch_idx]
-            self.attention_mask[cache_idx] = 0  # Set default
-
-            if text_len <= self.text_sliding_window:
-                # This is safe since the cache length is larger than the max image tokens + sliding_window
-                tokens_to_take = min(seq_len, self.max_cache_len)
-                self.attention_mask[cache_idx, -tokens_to_take:] = attention_mask[
-                    batch_idx, -tokens_to_take:
-                ]
-            else:
-                # Place the last sliding_window text tokens at the end of cache
-                cache_text_start = self.max_cache_len - self.text_sliding_window
-                self.attention_mask[cache_idx, cache_text_start:] = 1
-
-                # These include both image and padding tokens
-                non_text_tokens = seq_len - text_len
-                non_text_tokens_to_keep = min(
-                    non_text_tokens, self.max_cache_len - self.text_sliding_window
-                )
-
-                # Take the last image_tokens_to_keep image tokens
-                image_end_in_seq = seq_len - text_len
-
-                self.attention_mask[
-                    cache_idx,
-                    cache_text_start - non_text_tokens_to_keep : cache_text_start,
-                ] = attention_mask[
-                    batch_idx,
-                    image_end_in_seq - non_text_tokens_to_keep : image_end_in_seq,
-                ]
+        for i, cache_idx in enumerate(cache_idxs):
+            self.text_token_counts[cache_idx] = new_text_lens[i]
 
     def _prefill_update(
         self,
@@ -249,7 +165,6 @@ class ContinuousBatchingCache(StaticCache):
         self,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        layer_idx: torch.Tensor,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -270,16 +185,8 @@ class ContinuousBatchingCache(StaticCache):
             "`num_valid_tokens` must be provided in `cache_kwargs`"
         )
 
-        layer_idx_item = layer_idx[0]
-
-        k_cache = self.key_cache[layer_idx_item]  # (B, H, L, D)
-        v_cache = self.value_cache[layer_idx_item]  # (B, H, L, D)
-
-        valid_mask = num_valid_tokens > 0
-        valid_index_count = valid_mask.sum()
-
-        if valid_index_count == 0:
-            return self.key_cache[layer_idx_item], self.value_cache[layer_idx_item]
+        k_cache = self.key_cache  # (B, H, L, D)
+        v_cache = self.value_cache  # (B, H, L, D)
 
         num_valid_tokens_list = num_valid_tokens.tolist()
         for batch_idx, new_text_len in enumerate(num_valid_tokens_list):
@@ -289,7 +196,7 @@ class ContinuousBatchingCache(StaticCache):
 
             # Have to do it this way, can't compile with continue
             if new_text_len > 0:
-                curr_text_cache_len = self.text_token_counts[layer_idx_item][cache_idx]
+                curr_text_cache_len = self.text_token_counts[cache_idx]
 
                 # Decode is **left-padded** so we ignore these tokens
                 k_new = key_states[batch_idx, :, -new_text_len:, :]
@@ -309,7 +216,7 @@ class ContinuousBatchingCache(StaticCache):
                     k_cache[cache_idx, :, -shift:, :] = k_new
                     v_cache[cache_idx, :, -shift:, :] = v_new
 
-                    self.text_token_counts[layer_idx_item][cache_idx] += new_text_len
+                    self.text_token_counts[cache_idx] += new_text_len
                 else:
                     # Expand text region to exactly text_sliding_window tokens
                     # Shift entire cache left to make room for the full sliding window
@@ -364,14 +271,141 @@ class ContinuousBatchingCache(StaticCache):
                         cache_idx, :, desired_text_start + keep : self.max_cache_len, :
                     ] = v_new
 
-                    self.text_token_counts[layer_idx_item][cache_idx] = (
-                        self.text_sliding_window
-                    )
+                    self.text_token_counts[cache_idx] = self.text_sliding_window
 
-        self.key_cache[layer_idx_item] = k_cache
-        self.value_cache[layer_idx_item] = v_cache
+        self.key_cache = k_cache
+        self.value_cache = v_cache
 
-        return self.key_cache[layer_idx_item], self.value_cache[layer_idx_item]
+        return self.key_cache, self.value_cache
+
+
+class ContinuousBatchingCache:
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        batch_size: int,
+        max_cache_len: int,
+        text_sliding_window: int,
+        device: int,
+        dtype: int,
+    ):
+        self.text_sliding_window = text_sliding_window
+        self.num_layers = config.num_hidden_layers
+        self.max_cache_len = max_cache_len
+        self.max_batch_size = batch_size
+
+        self.attention_mask = torch.zeros(
+            (self.max_batch_size, self.max_cache_len), device=device, dtype=torch.long
+        )
+        self.layer_caches = [
+            ContinuousBatchingLayerCache(
+                config,
+                batch_size=batch_size,
+                max_cache_len=max_cache_len,
+                text_sliding_window=text_sliding_window,
+                device=device,
+                dtype=dtype,
+            )
+            for _ in range(self.num_layers)
+        ]
+
+        self.dtype = dtype
+        self.device = device
+
+    def update_text_counts(self, cache_idxs: List[int], new_text_lens: List[int]):
+        assert len(cache_idxs) == len(new_text_lens)
+        for layer_idx in range(self.num_layers):
+            self.layer_caches[layer_idx].update_text_counts(cache_idxs, new_text_lens)
+
+    def maybe_shift_attention_mask(
+        self, num_valid_tokens: torch.Tensor, cache_idxs: List[int]
+    ):
+        shift_amounts = [0] * len(cache_idxs)
+        num_valid_tokens_list = num_valid_tokens.tolist()
+        for batch_idx, cache_idx in enumerate(cache_idxs):
+            new_text_len = num_valid_tokens_list[batch_idx]
+
+            # Same token counts for all layers when we start, so we take 0th
+            curr_text_cache_len = self.layer_caches[0].text_token_counts[cache_idx]
+
+            if curr_text_cache_len + new_text_len <= self.text_sliding_window:
+                # If we are under the sliding window length, shift the entire cache left
+                # Since we setup the max cache length with enough buffer, this will ONLY drop
+                # left padding tokens out
+                shift_amounts[batch_idx] = new_text_len
+            else:
+                # Shift entire cache left to make room for full text sliding window
+                # If this is <=0, we are already above the sliding window, so the attention mask stays the same
+                shift_amounts[batch_idx] = (
+                    self.text_sliding_window - curr_text_cache_len
+                )
+
+        self._shift_attention_matrix_left(shift_amounts)
+
+    def _shift_attention_matrix_left(self, shifts: List[int]):
+        batch_size, seq_len = self.attention_mask.shape
+
+        shifts_tensor = torch.tensor(
+            shifts, device=self.attention_mask.device
+        ).unsqueeze(1)
+
+        # Create index tensor for gathering
+        indices = (
+            torch.arange(seq_len, device=self.attention_mask.device)
+            .unsqueeze(0)
+            .expand(batch_size, -1)
+        )
+        shifted_indices = (indices + shifts_tensor).clamp(0, seq_len - 1)
+
+        # Gather values and create mask for valid positions
+        new_attention_mask = torch.gather(self.attention_mask, 1, shifted_indices)
+
+        # Set positions beyond original length to 1
+        valid_mask = indices < (seq_len - shifts_tensor)
+        new_attention_mask = torch.where(valid_mask, new_attention_mask, 1)
+
+        self.attention_mask = new_attention_mask
+
+    # Mirrors the logic from _prefill_update
+    def prefill_attention_mask_update(
+        self,
+        attention_mask: torch.Tensor,
+        cache_idxs: List[int],
+        text_lengths: List[int],
+    ):
+        seq_len = attention_mask.shape[1]
+
+        for batch_idx, cache_idx in enumerate(cache_idxs):
+            text_len = text_lengths[batch_idx]
+            self.attention_mask[cache_idx] = 0  # Set default
+
+            if text_len <= self.text_sliding_window:
+                # This is safe since the cache length is larger than the max image tokens + sliding_window
+                tokens_to_take = min(seq_len, self.max_cache_len)
+                self.attention_mask[cache_idx, -tokens_to_take:] = attention_mask[
+                    batch_idx, -tokens_to_take:
+                ]
+            else:
+                # Place the last sliding_window text tokens at the end of cache
+                cache_text_start = self.max_cache_len - self.text_sliding_window
+                self.attention_mask[cache_idx, cache_text_start:] = 1
+
+                # These include both image and padding tokens
+                non_text_tokens = seq_len - text_len
+                non_text_tokens_to_keep = min(
+                    non_text_tokens, self.max_cache_len - self.text_sliding_window
+                )
+
+                # Take the last image_tokens_to_keep image tokens
+                image_end_in_seq = seq_len - text_len
+
+                self.attention_mask[
+                    cache_idx,
+                    cache_text_start - non_text_tokens_to_keep : cache_text_start,
+                ] = attention_mask[
+                    batch_idx,
+                    image_end_in_seq - non_text_tokens_to_keep : image_end_in_seq,
+                ]
 
     # This is used by HF models to determine the causal relationship between new tokens and cache
     # Our cache is left padded - So all tokens should always be visible to new tokens

@@ -156,7 +156,6 @@ class Qwen2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        layer_idx: torch.Tensor,
         position_embeddings: Tuple[torch.Tensor, torch.Tensor],
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
@@ -185,9 +184,9 @@ class Qwen2Attention(nn.Module):
 
             # Recompiles without this
             cache_idx_length = len(cache_idxs) if cache_idxs is not None else 0
-            if settings.FOUNDATION_STATIC_CACHE:
-                cache_idxs_len = get_nearest_pad(len(cache_idxs))
-                cache_idxs = cache_idxs + [-1] * (cache_idxs_len - len(cache_idxs))
+            if settings.FOUNDATION_STATIC_CACHE and cache_idx_length > 0:
+                cache_idxs_len = get_nearest_pad(cache_idx_length)
+                cache_idxs = cache_idxs + [-1] * (cache_idxs_len - cache_idx_length)
 
             cache_kwargs = {
                 "sin": sin,
@@ -200,7 +199,7 @@ class Qwen2Attention(nn.Module):
                 "cache_idx_length": cache_idx_length,
             }
             key_states, value_states = past_key_value.update(
-                key_states, value_states, layer_idx, cache_kwargs
+                key_states, value_states, cache_kwargs
             )
 
         attention_interface: Callable = eager_attention_forward
@@ -285,7 +284,6 @@ class Qwen2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        layer_idx: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Cache] = None,
@@ -310,7 +308,6 @@ class Qwen2DecoderLayer(nn.Module):
         # Self Attention
         hidden_states, self_attn_weights = self.self_attn(
             hidden_states=hidden_states,
-            layer_idx=layer_idx,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_value=past_key_value,
@@ -511,10 +508,9 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
             decoder_layer = self.layers[i]
             layer_outputs = decoder_layer(
                 hidden_states,
-                layer_idx=torch.tensor([i]),
                 attention_mask=causal_mask,
                 position_ids=position_ids,
-                past_key_value=past_key_values,
+                past_key_value=past_key_values.layer_caches[i],
                 output_attentions=output_attentions,
                 use_cache=use_cache,
                 cache_position=cache_position,
