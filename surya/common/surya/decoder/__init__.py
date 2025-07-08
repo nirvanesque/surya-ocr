@@ -18,7 +18,9 @@ from surya.common.surya.decoder.config import SuryaDecoderConfig
 
 from transformers.utils import is_flash_attn_2_available
 
+from surya.common.xla import get_nearest_pad
 from surya.logging import get_logger
+from surya.settings import settings
 
 if is_flash_attn_2_available():
     from surya.common.surya.flash_attn_utils import (
@@ -154,7 +156,7 @@ class Qwen2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        layer_idx: int,
+        layer_idx: torch.Tensor,
         position_embeddings: Tuple[torch.Tensor, torch.Tensor],
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
@@ -180,6 +182,13 @@ class Qwen2Attention(nn.Module):
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             # cache_idxs, num_valid_tokens, and prefill add support for our new caching mechanism
+
+            # Recompiles without this
+            cache_idx_length = len(cache_idxs) if cache_idxs is not None else 0
+            if settings.FOUNDATION_STATIC_CACHE:
+                cache_idxs_len = get_nearest_pad(len(cache_idxs))
+                cache_idxs = cache_idxs + [-1] * (cache_idxs_len - len(cache_idxs))
+
             cache_kwargs = {
                 "sin": sin,
                 "cos": cos,
@@ -188,6 +197,7 @@ class Qwen2Attention(nn.Module):
                 "num_valid_tokens": num_valid_tokens,
                 "prefill": prefill,
                 "text_lengths": text_lengths,
+                "cache_idx_length": cache_idx_length,
             }
             key_states, value_states = past_key_value.update(
                 key_states, value_states, layer_idx, cache_kwargs
@@ -275,7 +285,7 @@ class Qwen2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        layer_idx: int,
+        layer_idx: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Cache] = None,
@@ -495,14 +505,13 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
 
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        logger.debug(f"Decoder hidden size: {hidden_states.shape}, ")
 
         # decoder layers
         for i in range(self.config.num_hidden_layers):
             decoder_layer = self.layers[i]
             layer_outputs = decoder_layer(
                 hidden_states,
-                layer_idx=i,
+                layer_idx=torch.tensor([i]),
                 attention_mask=causal_mask,
                 position_ids=position_ids,
                 past_key_value=past_key_values,

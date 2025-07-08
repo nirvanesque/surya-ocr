@@ -65,11 +65,7 @@ class FoundationModelLoader(ModelLoader):
             )
             compile_args = get_compile_args(device)
             model.encoder = torch.compile(model.vision_encoder, **compile_args)
-            for idx in range(len(model.decoder.layers)):
-                model.decoder.layers[idx] = torch.compile(
-                    model.decoder.layers[idx], **compile_args
-                )
-
+            model.decoder = torch.compile(model.decoder, **compile_args, dynamic=True)
             model.embedder = torch.compile(model.embedder, **compile_args)
 
         logger.debug(

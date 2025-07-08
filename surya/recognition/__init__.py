@@ -37,7 +37,7 @@ logger = get_logger()
 
 class RecognitionPredictor(BasePredictor):
     batch_size = settings.RECOGNITION_BATCH_SIZE
-    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 128}
+    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 96}
 
     # Override base init - Do not load model
     def __init__(self, foundation_predictor: FoundationPredictor):

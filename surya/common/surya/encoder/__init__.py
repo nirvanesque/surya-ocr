@@ -9,7 +9,6 @@ from transformers.activations import ACT2FN
 from transformers.utils import is_flash_attn_2_available
 
 from surya.common.surya.encoder.config import SuryaEncoderConfig
-from surya.common.xla import mark_step
 from surya.logging import get_logger
 
 if is_flash_attn_2_available():
@@ -293,7 +292,6 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         num_heads = q.shape[1]
         head_dim = q.shape[2]
 
-        mark_step()
         seq_lengths = cu_seqlens[1:] - cu_seqlens[:-1]  # Keep as tensor
         max_seq_len = seq_lengths.max().item()  # Use .max() on tensor
 
@@ -359,7 +357,6 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         """
         device = batched_output.device
 
-        mark_step()
         seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
 
         batch_indices = []

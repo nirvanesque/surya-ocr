@@ -15,7 +15,7 @@ from surya.common.surya.config import SuryaModelConfig
 from surya.common.surya.decoder import SuryaDecoderModel
 from surya.common.surya.embedder import SimpleTokenEmbedder
 from surya.common.surya.encoder import SuryaEncoderModel
-from surya.common.xla import mark_step
+from surya.common.xla import get_nearest_pad
 from surya.settings import settings
 
 from transformers.utils import is_flash_attn_2_available
@@ -174,8 +174,17 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         valid_embed_len = actual_chunk_len // (
             self.vision_encoder.spatial_merge_size**2
         )
-        if settings.FOUNDATION_STATIC_CACHE and actual_chunk_len < encoder_chunk_size:
-            padding_len = encoder_chunk_size - actual_chunk_len
+        if (
+            settings.FOUNDATION_STATIC_CACHE
+            and actual_chunk_len % encoder_chunk_size != 0
+        ):
+            pad_to_nearest = get_nearest_pad(actual_chunk_len)
+
+            # Always pad to the nearest encoder chunk size if possible
+            if encoder_chunk_size > actual_chunk_len:
+                pad_to_nearest = encoder_chunk_size
+
+            padding_len = pad_to_nearest - actual_chunk_len
             padding = torch.zeros(
                 padding_len,
                 *chunk_pixels.shape[1:],
@@ -206,14 +215,20 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         curr_seq_len = 0
         grid_thw_list = grid_thw.tolist()
         for i in range(len(grid_thw_list)):
-            curr_chunk_len += (
+            curr_sample_len = (
                 grid_thw_list[i][0] * grid_thw_list[i][1] * grid_thw_list[i][2]
             )
-            if curr_chunk_len > encoder_chunk_size:
+
+            if (
+                curr_chunk_len > (encoder_chunk_size - curr_sample_len)
+                and curr_chunk_len > 0
+            ):
                 chunks.append(curr_chunk_len + curr_seq_len)
                 curr_seq_len += curr_chunk_len
                 curr_chunk_len = 0
-                grid_chunks.append(i + 1)
+                grid_chunks.append(i)
+
+            curr_chunk_len += curr_sample_len
 
         if curr_chunk_len > 0:
             chunks.append(pixel_values.shape[0])
@@ -241,11 +256,13 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                     chunk_pixels, chunk_grid_thw, actual_chunk_len, encoder_chunk_size
                 )
             )
+            logger.debug(
+                f"Inferencing chunk {i} with size {chunk_pixels.shape} and grid {chunk_grid_thw.shape}"
+            )
 
             chunk_embeddings = self.vision_encoder.embed_images(
                 image_batch=chunk_pixels, grid_thw=chunk_grid_thw
             )
-            mark_step()
             embeddings.append(chunk_embeddings[:valid_embed_len])
 
         if len(embeddings) == 0:

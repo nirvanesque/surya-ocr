@@ -49,14 +49,16 @@ class ContinuousBatchingCache(StaticCache):
         self,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        layer_idx: int,
+        layer_idx: torch.Tensor,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # layer_idx tensor -> int is needed here for compile
         prefill = cache_kwargs.get("prefill", False)
+        layer_idx_item = layer_idx[0]
         if prefill:
             return self._prefill_update(
-                self.key_cache[layer_idx],
-                self.value_cache[layer_idx],
+                self.key_cache[layer_idx_item],
+                self.value_cache[layer_idx_item],
                 key_states,
                 value_states,
                 cache_kwargs,
@@ -84,8 +86,6 @@ class ContinuousBatchingCache(StaticCache):
         num_valid_tokens_list = num_valid_tokens.tolist()
         for batch_idx, cache_idx in enumerate(cache_idxs):
             new_text_len = num_valid_tokens_list[batch_idx]
-            if new_text_len == 0:
-                continue  # skip padded batch entry
 
             # Same token counts for all layers when we start, so we take 0th
             curr_text_cache_len = self.text_token_counts[0][cache_idx]
@@ -175,6 +175,7 @@ class ContinuousBatchingCache(StaticCache):
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ):
         cache_idxs: List[int] = cache_kwargs.get("cache_idxs", None)
+        cache_idx_length: int = cache_kwargs.get("cache_idx_length", None)
         text_lengths: List[int] = cache_kwargs.get("text_lengths", None)
         assert cache_idxs is not None, "cache_idxs must be specified during prefill"
         assert text_lengths is not None, "text_lengths must be specified during prefill"
@@ -183,61 +184,64 @@ class ContinuousBatchingCache(StaticCache):
         seq_len = key_states.shape[2]
 
         for batch_idx, cache_idx in enumerate(cache_idxs):
-            text_len = text_lengths[batch_idx]
+            # If the cache_idx is out of bounds, skip it
+            # Cannot continue here due to compile
+            if batch_idx < cache_idx_length:
+                text_len = text_lengths[batch_idx]
 
-            if text_len <= self.text_sliding_window:
-                # This is safe since the cache length is larger than the max image tokens + sliding_window
-                tokens_to_take = min(seq_len, self.max_cache_len)
-                start_idx = seq_len - tokens_to_take
-                key_cache[cache_idx, :, -tokens_to_take:, :] = key_states[
-                    batch_idx, :, start_idx:, :
-                ]
-                value_cache[cache_idx, :, -tokens_to_take:, :] = value_states[
-                    batch_idx, :, start_idx:, :
-                ]
-            else:
-                # Place the last sliding_window text tokens at the end of cache
-                text_start_in_seq = seq_len - self.text_sliding_window
-                cache_text_start = self.max_cache_len - self.text_sliding_window
+                if text_len <= self.text_sliding_window:
+                    # This is safe since the cache length is larger than the max image tokens + sliding_window
+                    tokens_to_take = min(seq_len, self.max_cache_len)
+                    start_idx = seq_len - tokens_to_take
+                    key_cache[cache_idx, :, -tokens_to_take:, :] = key_states[
+                        batch_idx, :, start_idx:, :
+                    ]
+                    value_cache[cache_idx, :, -tokens_to_take:, :] = value_states[
+                        batch_idx, :, start_idx:, :
+                    ]
+                else:
+                    # Place the last sliding_window text tokens at the end of cache
+                    text_start_in_seq = seq_len - self.text_sliding_window
+                    cache_text_start = self.max_cache_len - self.text_sliding_window
 
-                key_cache[cache_idx, :, cache_text_start:, :] = key_states[
-                    batch_idx, :, text_start_in_seq:, :
-                ]
-                value_cache[cache_idx, :, cache_text_start:, :] = value_states[
-                    batch_idx, :, text_start_in_seq:, :
-                ]
+                    key_cache[cache_idx, :, cache_text_start:, :] = key_states[
+                        batch_idx, :, text_start_in_seq:, :
+                    ]
+                    value_cache[cache_idx, :, cache_text_start:, :] = value_states[
+                        batch_idx, :, text_start_in_seq:, :
+                    ]
 
-                # These include both image and padding tokens
-                non_text_tokens = seq_len - text_len
-                non_text_tokens_to_keep = min(
-                    non_text_tokens, self.max_cache_len - self.text_sliding_window
-                )
+                    # These include both image and padding tokens
+                    non_text_tokens = seq_len - text_len
+                    non_text_tokens_to_keep = min(
+                        non_text_tokens, self.max_cache_len - self.text_sliding_window
+                    )
 
-                # Take the last image_tokens_to_keep image tokens
-                image_end_in_seq = seq_len - text_len
+                    # Take the last image_tokens_to_keep image tokens
+                    image_end_in_seq = seq_len - text_len
 
-                key_cache[
-                    cache_idx,
-                    :,
-                    cache_text_start - non_text_tokens_to_keep : cache_text_start,
-                    :,
-                ] = key_states[
-                    batch_idx,
-                    :,
-                    image_end_in_seq - non_text_tokens_to_keep : image_end_in_seq,
-                    :,
-                ]
-                value_cache[
-                    cache_idx,
-                    :,
-                    cache_text_start - non_text_tokens_to_keep : cache_text_start,
-                    :,
-                ] = value_states[
-                    batch_idx,
-                    :,
-                    image_end_in_seq - non_text_tokens_to_keep : image_end_in_seq,
-                    :,
-                ]
+                    key_cache[
+                        cache_idx,
+                        :,
+                        cache_text_start - non_text_tokens_to_keep : cache_text_start,
+                        :,
+                    ] = key_states[
+                        batch_idx,
+                        :,
+                        image_end_in_seq - non_text_tokens_to_keep : image_end_in_seq,
+                        :,
+                    ]
+                    value_cache[
+                        cache_idx,
+                        :,
+                        cache_text_start - non_text_tokens_to_keep : cache_text_start,
+                        :,
+                    ] = value_states[
+                        batch_idx,
+                        :,
+                        image_end_in_seq - non_text_tokens_to_keep : image_end_in_seq,
+                        :,
+                    ]
 
         return key_states, value_states
 
@@ -245,7 +249,7 @@ class ContinuousBatchingCache(StaticCache):
         self,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        layer_idx: int,
+        layer_idx: torch.Tensor,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -266,97 +270,108 @@ class ContinuousBatchingCache(StaticCache):
             "`num_valid_tokens` must be provided in `cache_kwargs`"
         )
 
-        batch_size = key_states.shape[0]
-        cache_idxs = list(range(batch_size))
+        layer_idx_item = layer_idx[0]
 
-        k_cache = self.key_cache[layer_idx]  # (B, H, L, D)
-        v_cache = self.value_cache[layer_idx]  # (B, H, L, D)
+        k_cache = self.key_cache[layer_idx_item]  # (B, H, L, D)
+        v_cache = self.value_cache[layer_idx_item]  # (B, H, L, D)
+
+        valid_mask = num_valid_tokens > 0
+        valid_index_count = valid_mask.sum()
+
+        if valid_index_count == 0:
+            return self.key_cache[layer_idx_item], self.value_cache[layer_idx_item]
 
         num_valid_tokens_list = num_valid_tokens.tolist()
-        for batch_idx, cache_idx in enumerate(cache_idxs):
+        for batch_idx, new_text_len in enumerate(num_valid_tokens_list):
+            cache_idx = batch_idx
+
             new_text_len = num_valid_tokens_list[batch_idx]
-            if new_text_len == 0:
-                continue  # skip padded batch entry
 
-            curr_text_cache_len = self.text_token_counts[layer_idx][cache_idx]
+            # Have to do it this way, can't compile with continue
+            if new_text_len > 0:
+                curr_text_cache_len = self.text_token_counts[layer_idx_item][cache_idx]
 
-            # Decode is **left-padded** so we ignore these tokens
-            k_new = key_states[batch_idx, :, -new_text_len:, :]
-            v_new = value_states[batch_idx, :, -new_text_len:, :]
+                # Decode is **left-padded** so we ignore these tokens
+                k_new = key_states[batch_idx, :, -new_text_len:, :]
+                v_new = value_states[batch_idx, :, -new_text_len:, :]
 
-            if curr_text_cache_len + new_text_len <= self.text_sliding_window:
-                # If we are under the sliding window length, shift the entire cache left
-                # Since we setup the max cache length with enough buffer, this will ONLY drop
-                # left padding tokens out
-                shift = new_text_len
-                k_cache[cache_idx, :, :-shift, :] = k_cache[
-                    cache_idx, :, shift:, :
-                ].clone()
-                v_cache[cache_idx, :, :-shift, :] = v_cache[
-                    cache_idx, :, shift:, :
-                ].clone()
-                k_cache[cache_idx, :, -shift:, :] = k_new
-                v_cache[cache_idx, :, -shift:, :] = v_new
-
-                self.text_token_counts[layer_idx][cache_idx] += new_text_len
-            else:
-                # Expand text region to exactly text_sliding_window tokens
-                # Shift entire cache left to make room for the full sliding window
-
-                # Calculate how much to shift left to accommodate full sliding window
-                desired_text_start = self.max_cache_len - self.text_sliding_window
-
-                # We need to figure out how many text tokens to keep and where to place them
-                keep = self.text_sliding_window - new_text_len
-                assert keep > 0, (
-                    "Cannot add more new text tokens than the sliding window"
-                )
-
-                # Shift entire cache left to make room for full text sliding window
-                shift_amount = self.text_sliding_window - curr_text_cache_len
-                if shift_amount > 0:  # Cannot be negative, may be exactly 0
-                    k_cache[cache_idx, :, :-shift_amount, :] = k_cache[
-                        cache_idx, :, shift_amount:, :
+                if curr_text_cache_len + new_text_len <= self.text_sliding_window:
+                    # If we are under the sliding window length, shift the entire cache left
+                    # Since we setup the max cache length with enough buffer, this will ONLY drop
+                    # left padding tokens out
+                    shift = new_text_len
+                    k_cache[cache_idx, :, :-shift, :] = k_cache[
+                        cache_idx, :, shift:, :
                     ].clone()
-                    v_cache[cache_idx, :, :-shift_amount, :] = v_cache[
-                        cache_idx, :, shift_amount:, :
+                    v_cache[cache_idx, :, :-shift, :] = v_cache[
+                        cache_idx, :, shift:, :
+                    ].clone()
+                    k_cache[cache_idx, :, -shift:, :] = k_new
+                    v_cache[cache_idx, :, -shift:, :] = v_new
+
+                    self.text_token_counts[layer_idx_item][cache_idx] += new_text_len
+                else:
+                    # Expand text region to exactly text_sliding_window tokens
+                    # Shift entire cache left to make room for the full sliding window
+
+                    # Calculate how much to shift left to accommodate full sliding window
+                    desired_text_start = self.max_cache_len - self.text_sliding_window
+
+                    # We need to figure out how many text tokens to keep and where to place them
+                    keep = self.text_sliding_window - new_text_len
+                    assert keep > 0, (
+                        "Cannot add more new text tokens than the sliding window"
+                    )
+
+                    # Shift entire cache left to make room for full text sliding window
+                    shift_amount = self.text_sliding_window - curr_text_cache_len
+                    if shift_amount > 0:  # Cannot be negative, may be exactly 0
+                        k_cache[cache_idx, :, :-shift_amount, :] = k_cache[
+                            cache_idx, :, shift_amount:, :
+                        ].clone()
+                        v_cache[cache_idx, :, :-shift_amount, :] = v_cache[
+                            cache_idx, :, shift_amount:, :
+                        ].clone()
+
+                    # Now place the most recent 'keep' text tokens at the start of text region
+                    old_text_start = (
+                        self.max_cache_len - curr_text_cache_len - shift_amount
+                    )
+                    k_cache[
+                        cache_idx, :, desired_text_start : desired_text_start + keep, :
+                    ] = k_cache[
+                        cache_idx,
+                        :,
+                        old_text_start + (curr_text_cache_len - keep) : old_text_start
+                        + curr_text_cache_len,
+                        :,
+                    ].clone()
+                    v_cache[
+                        cache_idx, :, desired_text_start : desired_text_start + keep, :
+                    ] = v_cache[
+                        cache_idx,
+                        :,
+                        old_text_start + (curr_text_cache_len - keep) : old_text_start
+                        + curr_text_cache_len,
+                        :,
                     ].clone()
 
-                # Now place the most recent 'keep' text tokens at the start of text region
-                old_text_start = self.max_cache_len - curr_text_cache_len - shift_amount
-                k_cache[
-                    cache_idx, :, desired_text_start : desired_text_start + keep, :
-                ] = k_cache[
-                    cache_idx,
-                    :,
-                    old_text_start + (curr_text_cache_len - keep) : old_text_start
-                    + curr_text_cache_len,
-                    :,
-                ].clone()
-                v_cache[
-                    cache_idx, :, desired_text_start : desired_text_start + keep, :
-                ] = v_cache[
-                    cache_idx,
-                    :,
-                    old_text_start + (curr_text_cache_len - keep) : old_text_start
-                    + curr_text_cache_len,
-                    :,
-                ].clone()
+                    # Add new tokens at the end
+                    k_cache[
+                        cache_idx, :, desired_text_start + keep : self.max_cache_len, :
+                    ] = k_new
+                    v_cache[
+                        cache_idx, :, desired_text_start + keep : self.max_cache_len, :
+                    ] = v_new
 
-                # Add new tokens at the end
-                k_cache[
-                    cache_idx, :, desired_text_start + keep : self.max_cache_len, :
-                ] = k_new
-                v_cache[
-                    cache_idx, :, desired_text_start + keep : self.max_cache_len, :
-                ] = v_new
+                    self.text_token_counts[layer_idx_item][cache_idx] = (
+                        self.text_sliding_window
+                    )
 
-                self.text_token_counts[layer_idx][cache_idx] = self.text_sliding_window
+        self.key_cache[layer_idx_item] = k_cache
+        self.value_cache[layer_idx_item] = v_cache
 
-        self.key_cache[layer_idx] = k_cache
-        self.value_cache[layer_idx] = v_cache
-
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+        return self.key_cache[layer_idx_item], self.value_cache[layer_idx_item]
 
     # This is used by HF models to determine the causal relationship between new tokens and cache
     # Our cache is left padded - So all tokens should always be visible to new tokens
