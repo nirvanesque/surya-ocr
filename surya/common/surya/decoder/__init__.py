@@ -21,6 +21,8 @@ from surya.common.surya.decoder.config import SuryaDecoderConfig
 
 from transformers.utils import is_flash_attn_2_available
 
+from surya.common.xla import mark_step
+
 if is_flash_attn_2_available():
     from surya.common.surya.flash_attn_utils import (
         flash_attn_decode,
@@ -127,10 +129,9 @@ def eager_attention_forward(
 class Qwen2Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: SuryaDecoderConfig, layer_idx: int):
+    def __init__(self, config: SuryaDecoderConfig):
         super().__init__()
         self.config = config
-        self.layer_idx = layer_idx
         self.head_dim = getattr(
             config, "head_dim", config.hidden_size // config.num_attention_heads
         )
@@ -156,6 +157,7 @@ class Qwen2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
+        layer_idx: int,
         position_embeddings: Tuple[torch.Tensor, torch.Tensor],
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
@@ -180,7 +182,7 @@ class Qwen2Attention(nn.Module):
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            # cache_idxs, num_valid_tokens, and prefill add support for our new caching mechanism 
+            # cache_idxs, num_valid_tokens, and prefill add support for our new caching mechanism
             cache_kwargs = {
                 "sin": sin,
                 "cos": cos,
@@ -188,10 +190,10 @@ class Qwen2Attention(nn.Module):
                 "cache_idxs": cache_idxs,
                 "num_valid_tokens": num_valid_tokens,
                 "prefill": prefill,
-                "text_lengths": text_lengths
+                "text_lengths": text_lengths,
             }
             key_states, value_states = past_key_value.update(
-                key_states, value_states, self.layer_idx, cache_kwargs
+                key_states, value_states, layer_idx, cache_kwargs
             )
 
         attention_interface: Callable = eager_attention_forward
@@ -263,10 +265,10 @@ class Qwen2RMSNorm(nn.Module):
 
 
 class Qwen2DecoderLayer(nn.Module):
-    def __init__(self, config: SuryaDecoderConfig, layer_idx: int):
+    def __init__(self, config: SuryaDecoderConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Qwen2Attention(config=config, layer_idx=layer_idx)
+        self.self_attn = Qwen2Attention(config=config)
         self.mlp = Qwen2MLP(config)
         self.input_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen2RMSNorm(
@@ -276,6 +278,7 @@ class Qwen2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
+        layer_idx: int,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Cache] = None,
@@ -300,6 +303,7 @@ class Qwen2DecoderLayer(nn.Module):
         # Self Attention
         hidden_states, self_attn_weights = self.self_attn(
             hidden_states=hidden_states,
+            layer_idx=layer_idx,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_value=past_key_value,
@@ -447,10 +451,7 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.layers = nn.ModuleList(
-            [
-                Qwen2DecoderLayer(config, layer_idx)
-                for layer_idx in range(config.num_hidden_layers)
-            ]
+            [Qwen2DecoderLayer(config) for _ in range(config.num_hidden_layers)]
         )
         self.norm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen2RotaryEmbedding(config=config)
@@ -482,30 +483,28 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
         )
 
         if inputs_embeds is None:
-            raise ValueError(
-                "You must specify inputs_embeds"
-            )
+            raise ValueError("You must specify inputs_embeds")
 
         if cache_position is None:
-            raise ValueError(
-                "You must specify cache_position"
-            )
+            raise ValueError("You must specify cache_position")
 
         if position_ids is None:
-            raise ValueError(
-                "You must specify position_ids"
-            )
+            raise ValueError("You must specify position_ids")
 
         hidden_states = inputs_embeds
-        causal_mask = attention_mask        # We make the 4D mask in the combined model when needed
+        causal_mask = (
+            attention_mask  # We make the 4D mask in the combined model when needed
+        )
 
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
         # decoder layers
-        for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+        for i in range(self.config.num_hidden_layers):
+            decoder_layer = self.layers[i]
             layer_outputs = decoder_layer(
                 hidden_states,
+                layer_idx=i,
                 attention_mask=causal_mask,
                 position_ids=position_ids,
                 past_key_value=past_key_values,
@@ -521,6 +520,7 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
             )
 
             hidden_states = layer_outputs[0]
+            mark_step()
 
         hidden_states = self.norm(hidden_states)
 

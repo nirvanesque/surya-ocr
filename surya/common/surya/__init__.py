@@ -56,6 +56,7 @@ class FlashAttentionKwargs(TypedDict, total=False):
 
 class KwargsForCausalLM(FlashAttentionKwargs): ...
 
+
 class DistanceProjection(nn.Module):
     def __init__(self, in_features: int, out_features: int):
         super().__init__()
@@ -74,6 +75,7 @@ class DistanceProjection(nn.Module):
         nn.init.xavier_uniform_(self.fc2.weight)
         nn.init.zeros_(self.fc1.bias)
         nn.init.zeros_(self.fc2.bias)
+
 
 class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     config_class = SuryaModelConfig
@@ -166,28 +168,29 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         chunk_pixels: torch.Tensor,
         chunk_grid_thw: torch.Tensor,
         actual_chunk_len: int,
-        encoder_chunk_size: int
+        encoder_chunk_size: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        valid_embed_len = actual_chunk_len // (self.vision_encoder.spatial_merge_size ** 2)
+        valid_embed_len = actual_chunk_len // (
+            self.vision_encoder.spatial_merge_size**2
+        )
         if settings.FOUNDATION_STATIC_CACHE and actual_chunk_len < encoder_chunk_size:
             padding_len = encoder_chunk_size - actual_chunk_len
             padding = torch.zeros(
-                padding_len, 
+                padding_len,
                 *chunk_pixels.shape[1:],
                 device=chunk_pixels.device,
-                dtype=chunk_pixels.dtype
+                dtype=chunk_pixels.dtype,
             )
             chunk_pixels = torch.cat([chunk_pixels, padding], dim=0)
-            
+
             padding_grid = torch.tensor(
                 [[1, 2, padding_len // 2]],
                 device=chunk_grid_thw.device,
-                dtype=chunk_grid_thw.dtype
+                dtype=chunk_grid_thw.dtype,
             )
             chunk_grid_thw = torch.cat([chunk_grid_thw, padding_grid], dim=0)
 
         return chunk_pixels, chunk_grid_thw, valid_embed_len
-
 
     def get_image_embeddings(
         self,
@@ -200,8 +203,11 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         grid_chunks = [0]
         curr_chunk_len = 0
         curr_seq_len = 0
-        for i in range(len(grid_thw)):
-            curr_chunk_len += (grid_thw[i][0] * grid_thw[i][1] * grid_thw[i][2]).item()
+        grid_thw_list = grid_thw.tolist()
+        for i in range(len(grid_thw_list)):
+            curr_chunk_len += (
+                grid_thw_list[i][0] * grid_thw_list[i][1] * grid_thw_list[i][2]
+            )
             if curr_chunk_len > encoder_chunk_size:
                 chunks.append(curr_chunk_len + curr_seq_len)
                 curr_seq_len += curr_chunk_len
@@ -225,15 +231,18 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             end = chunks[i + 1]
             grid_start = grid_chunks[i]
             grid_end = grid_chunks[i + 1]
-            
+
             chunk_pixels = pixel_values[start:end]
             chunk_grid_thw = grid_thw[grid_start:grid_end]
             actual_chunk_len = end - start
-            chunk_pixels, chunk_grid_thw, valid_embed_len = self.maybe_static_pad_image_inputs(chunk_pixels, chunk_grid_thw, actual_chunk_len, encoder_chunk_size)
+            chunk_pixels, chunk_grid_thw, valid_embed_len = (
+                self.maybe_static_pad_image_inputs(
+                    chunk_pixels, chunk_grid_thw, actual_chunk_len, encoder_chunk_size
+                )
+            )
 
             chunk_embeddings = self.vision_encoder.embed_images(
-                image_batch=chunk_pixels,
-                grid_thw=chunk_grid_thw
+                image_batch=chunk_pixels, grid_thw=chunk_grid_thw
             )
             embeddings.append(chunk_embeddings[:valid_embed_len])
 
@@ -340,28 +349,30 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         )  # Shape is num_image_tokens x embed_dim
 
     def get_logits(self, hidden_states):
-        assert hidden_states.shape[1] == 1, "Multi output predictions only applied on the last token"
+        assert hidden_states.shape[1] == 1, (
+            "Multi output predictions only applied on the last token"
+        )
 
         all_lm_logits = []
         all_bbox_logits = []
-        
+
         current_hidden = hidden_states
-        
+
         # Loop includes initial prediction (i=0) plus multi_out_distance additional predictions
         for i in range(self.config.multi_output_distance + 1):
             if i > 0:
-                current_hidden = self.multi_output_projections[i-1](current_hidden)
-            
+                current_hidden = self.multi_output_projections[i - 1](current_hidden)
+
             lm_logits = self.lm_head(current_hidden)
             bbox_logits = F.sigmoid(self.bbox_head(current_hidden))
-            
+
             all_lm_logits.append(lm_logits)
             all_bbox_logits.append(bbox_logits)
-        
+
         # Concatenate along sequence dimension (dim=1)
         final_lm_logits = torch.cat(all_lm_logits, dim=1)
         final_bbox_logits = torch.cat(all_bbox_logits, dim=1)
-        
+
         return final_lm_logits, final_bbox_logits
 
     def forward(
@@ -392,10 +403,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
 
         # Handling flash attention kwargs outside the decoder to speed up + avoid graph breaks inside the decoder
         # Skipped during decoding since not required
-        if (
-            self.decoder.config._attn_implementation == "flash_attention_2"
-            and prefill
-        ):
+        if self.decoder.config._attn_implementation == "flash_attention_2" and prefill:
             batch_size, query_length, _ = inputs_embeds.shape
             indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(
                 attention_mask
