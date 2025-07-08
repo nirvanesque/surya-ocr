@@ -18,9 +18,7 @@ from surya.common.surya.decoder.config import SuryaDecoderConfig
 
 from transformers.utils import is_flash_attn_2_available
 
-from surya.common.xla import get_nearest_pad
 from surya.logging import get_logger
-from surya.settings import settings
 
 if is_flash_attn_2_available():
     from surya.common.surya.flash_attn_utils import (
@@ -183,10 +181,10 @@ class Qwen2Attention(nn.Module):
             # cache_idxs, num_valid_tokens, and prefill add support for our new caching mechanism
 
             # Recompiles without this
-            cache_idx_length = len(cache_idxs) if cache_idxs is not None else 0
-            if settings.FOUNDATION_STATIC_CACHE and cache_idx_length > 0:
-                cache_idxs_len = get_nearest_pad(cache_idx_length)
-                cache_idxs = cache_idxs + [-1] * (cache_idxs_len - cache_idx_length)
+            # We pass in a padded cache_idxs, so we need to compute the length of the cache
+            cache_idx_length = (
+                len([c for c in cache_idxs if c != -1]) if cache_idxs is not None else 0
+            )
 
             cache_kwargs = {
                 "sin": sin,

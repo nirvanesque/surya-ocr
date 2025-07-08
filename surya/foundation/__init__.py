@@ -425,6 +425,7 @@ class FoundationPredictor(BasePredictor):
         attention_mask = processed_inputs["attention_mask"].to(dtype=torch.long)
         position_ids = processed_inputs["position_ids"].to(dtype=torch.long)
         valid_batch_size = len(idxs_to_merge)
+        cache_idxs = idxs_to_merge
 
         if settings.FOUNDATION_STATIC_CACHE:
             input_ids = self.pad_to_batch_size(
@@ -435,6 +436,9 @@ class FoundationPredictor(BasePredictor):
             )
             position_ids = self.pad_to_batch_size(
                 position_ids, batch_size=self.kv_cache.max_batch_size
+            )
+            cache_idxs = cache_idxs + [-1] * (
+                self.kv_cache.max_batch_size - len(cache_idxs)
             )
 
         # Find text lengths of each
@@ -463,7 +467,7 @@ class FoundationPredictor(BasePredictor):
                 past_key_values=self.kv_cache,
                 use_cache=True,
                 encoder_chunk_size=self.get_encoder_chunk_size(),
-                cache_idxs=idxs_to_merge,
+                cache_idxs=cache_idxs,
                 prefill=True,
                 num_valid_tokens=None,  # Not required during prefill
                 text_lengths=text_lengths,
