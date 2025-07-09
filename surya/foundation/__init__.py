@@ -310,7 +310,7 @@ class FoundationPredictor(BasePredictor):
         batch_size = input_ids.shape[0]
 
         # Pre-shift the attention mask based on the cache update
-        self.kv_cache.maybe_shift_attention_mask(
+        self.kv_cache.decode_attention_mask_update(
             num_valid_tokens=num_valid_tokens, cache_idxs=list(range(batch_size))
         )
         with settings.INFERENCE_MODE():
@@ -447,6 +447,7 @@ class FoundationPredictor(BasePredictor):
         )  # (batch, seq_len)
         special_positions = is_special.nonzero().tolist()  # (num_special, 2)
         text_lengths = []
+        image_lengths = []
         for i in range(input_ids.shape[0]):
             row_special_positions = [pos for b, pos in special_positions if b == i]
             if len(row_special_positions) > 0:
@@ -455,6 +456,7 @@ class FoundationPredictor(BasePredictor):
             else:
                 prefix_len = 0
             text_lengths.append(input_ids.shape[1] - prefix_len)
+            image_lengths.append(prefix_len)
 
         with settings.INFERENCE_MODE():
             outputs = self.model(
@@ -491,9 +493,11 @@ class FoundationPredictor(BasePredictor):
         )
 
         self.kv_cache.prefill_attention_mask_update(
-            attention_mask, idxs_to_merge, text_lengths[:valid_batch_size]
+            attention_mask,
+            idxs_to_merge,
+            text_lengths[:valid_batch_size],
+            image_lengths[:valid_batch_size],
         )
-        self.kv_cache.update_text_counts(idxs_to_merge, text_lengths[:valid_batch_size])
 
         if current_inputs is None:
             new_seq_len = processed_outputs.input_ids.shape[1]

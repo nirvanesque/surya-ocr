@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     COMPILE_DETECTOR: bool = False
 
     # Text recognition
-    FOUNDATION_MODEL_CHECKPOINT: str = "datalab-to/foundation-2.10"
+    FOUNDATION_MODEL_CHECKPOINT: str = "datalab-to/foundation-alpha-nocce"
     FOUNDATION_MODEL_QUANTIZE: bool = False
     FOUNDATION_MAX_TOKENS: Optional[int] = None
     FOUNDATION_CHUNK_SIZE: Optional[int] = None
@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     )
     RECOGNITION_BENCH_DATASET_NAME: str = "vikp/rec_bench"
     RECOGNITION_PAD_VALUE: int = 255  # Should be 0 or 255
+
+    COMPILE_RECOGNITION: bool = False
 
     # Layout
     LAYOUT_BATCH_SIZE: Optional[int] = None
