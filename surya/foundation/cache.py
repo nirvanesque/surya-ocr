@@ -194,10 +194,7 @@ class ContinuousBatchingLayerCache(StaticCache):
 
         k_cache = self.key_cache  # (B, H, L, D)
         v_cache = self.value_cache  # (B, H, L, D)
-        max_valid_tokens = num_valid_tokens.max()
-
-        if max_valid_tokens.item() == 0:
-            return k_cache, v_cache
+        max_valid_tokens = num_valid_tokens.max().item()
 
         existing_space = (
             self.text_sliding_window - self.text_token_counts
@@ -265,10 +262,8 @@ class ContinuousBatchingLayerCache(StaticCache):
         self.text_token_counts += num_valid_tokens
         self.text_token_counts.clamp_(max=self.text_sliding_window)
 
-        self.key_cache = k_cache
-        self.value_cache = v_cache
-
-        return self.key_cache, self.value_cache
+        # These were passed in as self.key_cache and self.value_cache, so we return them to match the interface
+        return k_cache, v_cache
 
 
 class ContinuousBatchingCache:
