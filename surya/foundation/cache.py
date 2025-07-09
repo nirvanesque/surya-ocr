@@ -155,38 +155,67 @@ class ContinuousBatchingLayerCache(StaticCache):
         k_cache = self.key_cache  # (B, H, L, D)
         v_cache = self.value_cache  # (B, H, L, D)
 
-        num_valid_tokens_list = num_valid_tokens.tolist()
+        existing_space = (
+            self.text_sliding_window - self.text_token_counts
+        )  # free room per batch
+        end_insert_pos = (
+            self.text_sliding_window + self.cache_image_end - num_valid_tokens
+        )
+
+        shifts = (num_valid_tokens - existing_space).clamp(
+            min=torch.zeros_like(num_valid_tokens), max=num_valid_tokens
+        )
+        # ─► 0  when enough space
+        # ─► new_token_count-existing_space when partial space
+        # ─► new_token_count when no space
+
+        insert_positions = torch.where(
+            existing_space >= num_valid_tokens,  # “no-shift” case
+            self.text_token_counts + self.cache_image_end,  # append after current text
+            end_insert_pos,
+        )
+
+        shifts = shifts.view(-1, 1, 1).expand(
+            -1, k_cache.shape[1], self.text_sliding_window
+        )
+
+        # Shift the text tokens if needed
+        indices = (
+            torch.arange(self.text_sliding_window, device=k_cache.device)
+            .view(1, 1, -1)
+            .expand(k_cache.shape[0], k_cache.shape[1], -1)
+        )
+        shifted_indices = (
+            (indices + shifts).clamp(0, self.text_sliding_window - 1).unsqueeze(-1)
+        )
+        shifted_indices = shifted_indices.expand(-1, -1, -1, k_cache.shape[-1])
+        v_cache[:, :, self.cache_image_end :, :] = torch.gather(
+            v_cache[:, :, self.cache_image_end :, :], dim=2, index=shifted_indices
+        )
+        k_cache[:, :, self.cache_image_end :, :] = torch.gather(
+            k_cache[:, :, self.cache_image_end :, :], dim=2, index=shifted_indices
+        )
+
         for batch_idx, new_text_len in enumerate(num_valid_tokens):
             cache_idx = batch_idx
+            new_text_len = num_valid_tokens[batch_idx]
 
-            new_text_len = num_valid_tokens_list[batch_idx]
-            curr_text_cache_len = self.text_token_counts[cache_idx]
+            insert_position = insert_positions[batch_idx]
+            end_position = insert_position + new_text_len
 
-            # Decode is **left-padded** so we ignore these tokens
             k_new = key_states[batch_idx, :, -new_text_len:, :]
             v_new = value_states[batch_idx, :, -new_text_len:, :]
 
-            cache_text_end = self.cache_image_end + curr_text_cache_len
-            current_k_text = k_cache[
-                cache_idx, :, self.cache_image_end : cache_text_end
-            ]
-            current_v_text = v_cache[
-                cache_idx, :, self.cache_image_end : cache_text_end
-            ]
-
-            k_new = torch.cat([current_k_text, k_new], dim=1)
-            v_new = torch.cat([current_v_text, v_new], dim=1)
-
-            cache_text_len = min(k_new.shape[1], self.text_sliding_window)
-            k_new = k_new[:, -cache_text_len:]
-            v_new = v_new[:, -cache_text_len:]
-
-            total_text_tokens = k_new.shape[1]  # This is all text tokens to be cached
-            new_cache_text_end = self.cache_image_end + total_text_tokens
-
-            k_cache[cache_idx, :, self.cache_image_end : new_cache_text_end] = k_new
-            v_cache[cache_idx, :, self.cache_image_end : new_cache_text_end] = v_new
-            self.text_token_counts[cache_idx] = total_text_tokens
+            if new_text_len > 0:
+                candidate_tokens = self.text_token_counts[cache_idx] + new_text_len
+                total_text_tokens = (
+                    candidate_tokens
+                    if candidate_tokens <= self.text_sliding_window
+                    else self.text_sliding_window
+                )
+                k_cache[cache_idx, :, insert_position:end_position] = k_new
+                v_cache[cache_idx, :, insert_position:end_position] = v_new
+                self.text_token_counts[cache_idx] = total_text_tokens
 
         self.key_cache = k_cache
         self.value_cache = v_cache

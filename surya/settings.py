@@ -98,8 +98,6 @@ class Settings(BaseSettings):
     RECOGNITION_BENCH_DATASET_NAME: str = "vikp/rec_bench"
     RECOGNITION_PAD_VALUE: int = 255  # Should be 0 or 255
 
-    COMPILE_RECOGNITION: bool = False
-
     # Layout
     LAYOUT_BATCH_SIZE: Optional[int] = None
     LAYOUT_BENCH_DATASET_NAME: str = "vikp/publaynet_bench"

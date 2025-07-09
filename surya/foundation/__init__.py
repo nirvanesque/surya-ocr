@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from collections import deque
@@ -621,14 +622,19 @@ class FoundationPredictor(BasePredictor):
             if (
                 self.num_empty_slots / batch_size
             ) > self.min_prefill_ratio and self.prompt_queue:
+                start = time.time()
                 updated_inputs, outputs, merge_idxs = self.prefill(
                     current_inputs, max_lookahead_tokens=max_lookahead_tokens
                 )
                 mark_step()
 
+                logger.debug(f"Prefill took {time.time() - start:.2f} seconds")
+
+                start = time.time()
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 token_probs_cpu = outputs.token_probs.cpu()
+                bbox_preds_cpu = outputs.bbox_preds.cpu()
 
                 for temp_idx, b_idx in enumerate(merge_idxs):
                     if self.batch_prompt_mapping[b_idx] is not None:
@@ -639,7 +645,7 @@ class FoundationPredictor(BasePredictor):
                             predicted_tokens[p_idx].append(token)
 
                             # Keep on GPU for later postprocessing
-                            batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
+                            batch_bboxes[p_idx, batch_pos[p_idx]] = bbox_preds_cpu[
                                 temp_idx, t_idx
                             ]
                             batch_pos[p_idx] += 1
@@ -661,15 +667,20 @@ class FoundationPredictor(BasePredictor):
                                 self.batch_prompt_mapping[b_idx] = None
                                 pbar.update(1)
                                 break
+                logger.debug(f"Postprocessing took {time.time() - start:.2f} seconds")
             else:
+                start = time.time()
                 updated_inputs, outputs = self.decode(
                     current_inputs, max_lookahead_tokens=max_lookahead_tokens
                 )
                 mark_step()
+                logger.debug(f"Decoding took {time.time() - start:.2f} seconds")
 
+                start = time.time()
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 token_probs_cpu = outputs.token_probs.cpu()
+                bbox_preds_cpu = outputs.bbox_preds.cpu()
 
                 for b_idx, p_idx in self.batch_prompt_mapping.items():
                     if p_idx is not None:
@@ -681,7 +692,7 @@ class FoundationPredictor(BasePredictor):
                             predicted_tokens[p_idx].append(token)
 
                             # Keep on GPU for later postprocessing
-                            batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
+                            batch_bboxes[p_idx, batch_pos[p_idx]] = bbox_preds_cpu[
                                 b_idx, t_idx
                             ]
                             batch_pos[p_idx] += 1
@@ -716,6 +727,9 @@ class FoundationPredictor(BasePredictor):
                         if should_stop:
                             self.batch_prompt_mapping[b_idx] = None
                             pbar.update(1)
+                logger.debug(
+                    f"Postprocessing decode took {time.time() - start:.2f} seconds"
+                )
 
             # Update inputs and mark XLA step
             current_inputs = updated_inputs

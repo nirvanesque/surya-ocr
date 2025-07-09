@@ -292,20 +292,20 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         num_heads = q.shape[1]
         head_dim = q.shape[2]
 
-        seq_lengths = cu_seqlens[1:] - cu_seqlens[:-1]  # Keep as tensor
-        max_seq_len = seq_lengths.max().item()  # Use .max() on tensor
+        seq_lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+        max_seq_len = seq_lengths.max()
 
-        batch_indices = []
-        position_indices = []
+        # Vectorized approach
+        batch_indices = torch.repeat_interleave(
+            torch.arange(len(seq_lengths), device=seq_lengths.device), seq_lengths
+        )
 
-        for i, seq_len in enumerate(
-            seq_lengths.tolist()
-        ):  # Convert to list only for iteration
-            batch_indices.extend([i] * seq_len)
-            position_indices.extend(list(range(seq_len)))
-
-        batch_indices = torch.tensor(batch_indices, device=device)
-        position_indices = torch.tensor(position_indices, device=device)
+        position_indices = torch.cat(
+            [
+                torch.arange(seq_len, device=seq_lengths.device)
+                for seq_len in seq_lengths
+            ]
+        )
 
         batched_q = torch.zeros(
             (batch_size, max_seq_len, num_heads, head_dim), device=device, dtype=dtype
