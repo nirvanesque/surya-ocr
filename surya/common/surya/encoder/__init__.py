@@ -357,17 +357,14 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         """
         device = batched_output.device
 
-        seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
+        seq_lengths = cu_seqlens[1:] - cu_seqlens[:-1]
 
-        batch_indices = []
-        position_indices = []
-
-        for i, seq_len in enumerate(seq_lengths):
-            batch_indices.extend([i] * seq_len)
-            position_indices.extend(list(range(seq_len)))
-
-        batch_indices = torch.tensor(batch_indices, device=device)
-        position_indices = torch.tensor(position_indices, device=device)
+        batch_indices = torch.repeat_interleave(
+            torch.arange(len(seq_lengths), device=device), seq_lengths
+        )
+        position_indices = torch.cat(
+            [torch.arange(seq_len, device=device) for seq_len in seq_lengths]
+        )
 
         packed_output = batched_output[batch_indices, position_indices]
 

@@ -97,34 +97,74 @@ class ContinuousBatchingLayerCache(StaticCache):
         # Get cache dimensions
         seq_len = key_states.shape[2]
 
-        for batch_idx, cache_idx in enumerate(cache_idxs):
-            # If the cache_idx is out of bounds, skip it
-            # Cannot continue here due to compile
-            if batch_idx < cache_idx_length:
-                text_len = text_lengths[batch_idx]
-                state_image_end = seq_len - text_len
-                cache_image_start = self.cache_image_end - state_image_end
+        text_lengths_tensor = torch.tensor(
+            text_lengths[:cache_idx_length], device=key_states.device
+        )
 
-                # Assign image tokens (always static) to the cache
-                key_cache[cache_idx, :, cache_image_start : self.cache_image_end] = (
-                    key_states[batch_idx, :, :state_image_end, :]
-                )
-                value_cache[cache_idx, :, cache_image_start : self.cache_image_end] = (
-                    value_states[batch_idx, :, :state_image_end, :]
-                )
+        # Calculate dimensions for each batch item
+        state_image_ends = seq_len - text_lengths_tensor
+        cache_image_starts = self.cache_image_end - state_image_ends
 
-                # Assign text tokens (sliding window) to the cache
-                cache_text_len = min(text_len, self.text_sliding_window)
-                cache_text_end = self.cache_image_end + cache_text_len
-                key_cache[cache_idx, :, self.cache_image_end : cache_text_end] = (
-                    key_states[batch_idx, :, -cache_text_len:, :]
-                )
-                value_cache[cache_idx, :, self.cache_image_end : cache_text_end] = (
-                    value_states[batch_idx, :, -cache_text_len:, :]
-                )
-                self.text_token_counts[cache_idx] = (
-                    cache_text_len  # Track the position of our last text token
-                )
+        # Process image tokens
+        for i in range(cache_idx_length):
+            cache_idx = cache_idxs[i]
+            state_image_end = state_image_ends[i]
+            cache_image_start = cache_image_starts[i]
+
+            # Create index tensors for the cache positions
+            cache_seq_indices = torch.arange(
+                cache_image_start, self.cache_image_end, device=key_states.device
+            )
+            state_seq_indices = torch.arange(
+                0, state_image_end, device=key_states.device
+            )
+
+            # Use index_select to get the source data and index_copy_ to place it
+            selected_keys = torch.index_select(
+                key_states[i], dim=1, index=state_seq_indices
+            )
+            selected_values = torch.index_select(
+                value_states[i], dim=1, index=state_seq_indices
+            )
+
+            key_cache[cache_idx].index_copy_(
+                dim=1, index=cache_seq_indices, source=selected_keys
+            )
+            value_cache[cache_idx].index_copy_(
+                dim=1, index=cache_seq_indices, source=selected_values
+            )
+
+        # Process text tokens
+        for i in range(cache_idx_length):
+            cache_idx = cache_idxs[i]
+            text_len = text_lengths[i]
+            cache_text_len = min(text_len, self.text_sliding_window)
+            cache_text_end = self.cache_image_end + cache_text_len
+
+            # Create index tensors for text tokens
+            cache_text_indices = torch.arange(
+                self.cache_image_end, cache_text_end, device=key_states.device
+            )
+            state_text_indices = torch.arange(
+                seq_len - cache_text_len, seq_len, device=key_states.device
+            )
+
+            # Use index_select to get the source data and index_copy_ to place it
+            selected_keys = torch.index_select(
+                key_states[i], dim=1, index=state_text_indices
+            )
+            selected_values = torch.index_select(
+                value_states[i], dim=1, index=state_text_indices
+            )
+
+            key_cache[cache_idx].index_copy_(
+                dim=1, index=cache_text_indices, source=selected_keys
+            )
+            value_cache[cache_idx].index_copy_(
+                dim=1, index=cache_text_indices, source=selected_values
+            )
+
+            self.text_token_counts[cache_idx] = cache_text_len
 
         return key_states, value_states
 
@@ -154,6 +194,10 @@ class ContinuousBatchingLayerCache(StaticCache):
 
         k_cache = self.key_cache  # (B, H, L, D)
         v_cache = self.value_cache  # (B, H, L, D)
+        max_valid_tokens = num_valid_tokens.max()
+
+        if max_valid_tokens.item() == 0:
+            return k_cache, v_cache
 
         existing_space = (
             self.text_sliding_window - self.text_token_counts
@@ -162,9 +206,7 @@ class ContinuousBatchingLayerCache(StaticCache):
             self.text_sliding_window + self.cache_image_end - num_valid_tokens
         )
 
-        shifts = (num_valid_tokens - existing_space).clamp(
-            min=torch.zeros_like(num_valid_tokens), max=num_valid_tokens
-        )
+        shifts = (num_valid_tokens - existing_space).clamp(min=0)
         # ─► 0  when enough space
         # ─► new_token_count-existing_space when partial space
         # ─► new_token_count when no space
@@ -180,42 +222,48 @@ class ContinuousBatchingLayerCache(StaticCache):
         )
 
         # Shift the text tokens if needed
-        indices = (
-            torch.arange(self.text_sliding_window, device=k_cache.device)
-            .view(1, 1, -1)
-            .expand(k_cache.shape[0], k_cache.shape[1], -1)
-        )
-        shifted_indices = (
-            (indices + shifts).clamp(0, self.text_sliding_window - 1).unsqueeze(-1)
-        )
-        shifted_indices = shifted_indices.expand(-1, -1, -1, k_cache.shape[-1])
-        v_cache[:, :, self.cache_image_end :, :] = torch.gather(
-            v_cache[:, :, self.cache_image_end :, :], dim=2, index=shifted_indices
-        )
-        k_cache[:, :, self.cache_image_end :, :] = torch.gather(
-            k_cache[:, :, self.cache_image_end :, :], dim=2, index=shifted_indices
-        )
+        # Always shifting slows things down
+        if shifts.sum().item() > 0:
+            indices = (
+                torch.arange(self.text_sliding_window, device=k_cache.device)
+                .view(1, 1, -1)
+                .expand(k_cache.shape[0], k_cache.shape[1], -1)
+            )
+            shifted_indices = (
+                (indices + shifts).clamp(0, self.text_sliding_window - 1).unsqueeze(-1)
+            )
+            shifted_indices = shifted_indices.expand(-1, -1, -1, k_cache.shape[-1])
+            v_cache[:, :, self.cache_image_end :, :] = torch.gather(
+                v_cache[:, :, self.cache_image_end :, :], dim=2, index=shifted_indices
+            )
+            k_cache[:, :, self.cache_image_end :, :] = torch.gather(
+                k_cache[:, :, self.cache_image_end :, :], dim=2, index=shifted_indices
+            )
 
-        for batch_idx, new_text_len in enumerate(num_valid_tokens):
-            cache_idx = batch_idx
-            new_text_len = num_valid_tokens[batch_idx]
+        B, H, L, D = k_cache.shape
 
-            insert_position = insert_positions[batch_idx]
-            end_position = insert_position + new_text_len
+        t_range = torch.arange(max_valid_tokens, device=k_cache.device)  # (Tmax,)
+        valid_mask = t_range.unsqueeze(0) < num_valid_tokens.unsqueeze(1)  # (B,Tmax)
 
-            k_new = key_states[batch_idx, :, -new_text_len:, :]
-            v_new = value_states[batch_idx, :, -new_text_len:, :]
+        batch_idx, tok_off = valid_mask.nonzero(as_tuple=True)  # (Nvalid,)
+        batch_idx = batch_idx.repeat_interleave(H)  # (Nvalid·H)
+        tok_off = tok_off.repeat_interleave(H)
+        head_idx = torch.arange(H, device=k_cache.device).repeat(valid_mask.sum())
 
-            if new_text_len > 0:
-                candidate_tokens = self.text_token_counts[cache_idx] + new_text_len
-                total_text_tokens = (
-                    candidate_tokens
-                    if candidate_tokens <= self.text_sliding_window
-                    else self.text_sliding_window
-                )
-                k_cache[cache_idx, :, insert_position:end_position] = k_new
-                v_cache[cache_idx, :, insert_position:end_position] = v_new
-                self.text_token_counts[cache_idx] = total_text_tokens
+        seq_idx = insert_positions[batch_idx] + tok_off  # (Nvalid·H)
+
+        src_idx = (
+            key_states.size(2) - num_valid_tokens[batch_idx] + tok_off
+        )  # (Nvalid·H)
+
+        k_sel = key_states[batch_idx, head_idx, src_idx, :]  # (Nvalid·H, D)
+        v_sel = value_states[batch_idx, head_idx, src_idx, :]
+
+        k_cache.index_put_((batch_idx, head_idx, seq_idx), k_sel, accumulate=False)
+        v_cache.index_put_((batch_idx, head_idx, seq_idx), v_sel, accumulate=False)
+
+        self.text_token_counts += num_valid_tokens
+        self.text_token_counts.clamp_(max=self.text_sliding_window)
 
         self.key_cache = k_cache
         self.value_cache = v_cache
@@ -269,7 +317,19 @@ class ContinuousBatchingCache:
                 self.text_sliding_window, new_text_len + existing_token_count
             )
             cache_text_end = self.cache_image_end + cache_text_len
-            self.attention_mask[cache_idx, self.cache_image_end : cache_text_end] = 1
+
+            # Use index_copy_ instead of slicing
+            indices = torch.arange(
+                self.cache_image_end, cache_text_end, device=self.attention_mask.device
+            )
+            ones = torch.ones(
+                indices.size(0),
+                dtype=self.attention_mask.dtype,
+                device=self.attention_mask.device,
+            )
+            self.attention_mask[cache_idx].index_copy_(
+                dim=0, index=indices, source=ones
+            )
 
     # Mirrors the logic from _prefill_update
     def prefill_attention_mask_update(
@@ -285,17 +345,27 @@ class ContinuousBatchingCache:
             valid_mask_length = text_len + image_len
             self.attention_mask[cache_idx] = 0  # Set default
 
-            # Assign image mask
+            # Assign image mask using index_copy_
             cache_image_start = self.cache_image_end - image_len
-            self.attention_mask[cache_idx, cache_image_start : self.cache_image_end] = (
-                attention_mask[batch_idx, -valid_mask_length:-text_len]
+            image_indices = torch.arange(
+                cache_image_start,
+                self.cache_image_end,
+                device=self.attention_mask.device,
+            )
+            image_mask_values = attention_mask[batch_idx, -valid_mask_length:-text_len]
+            self.attention_mask[cache_idx].index_copy_(
+                dim=0, index=image_indices, source=image_mask_values
             )
 
-            # Assign text mask
+            # Assign text mask using index_copy_
             cache_text_length = min(text_len, self.text_sliding_window)
             cache_text_end = self.cache_image_end + cache_text_length
-            self.attention_mask[cache_idx, self.cache_image_end : cache_text_end] = (
-                attention_mask[batch_idx, -cache_text_length:]
+            text_indices = torch.arange(
+                self.cache_image_end, cache_text_end, device=self.attention_mask.device
+            )
+            text_mask_values = attention_mask[batch_idx, -cache_text_length:]
+            self.attention_mask[cache_idx].index_copy_(
+                dim=0, index=text_indices, source=text_mask_values
             )
 
     # This is used by HF models to determine the causal relationship between new tokens and cache
