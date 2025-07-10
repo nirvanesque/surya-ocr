@@ -292,20 +292,20 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         num_heads = q.shape[1]
         head_dim = q.shape[2]
 
-        seq_lengths = cu_seqlens[1:] - cu_seqlens[:-1]
-        max_seq_len = seq_lengths.max()
+        seq_lengths = cu_seqlens[1:] - cu_seqlens[:-1]  # Keep as tensor
+        max_seq_len = seq_lengths.max().item()  # Use .max() on tensor
 
-        # Vectorized approach
-        batch_indices = torch.repeat_interleave(
-            torch.arange(seq_lengths.shape[0], device=seq_lengths.device), seq_lengths
-        )
+        batch_indices = []
+        position_indices = []
 
-        position_indices = torch.cat(
-            [
-                torch.arange(seq_len, device=seq_lengths.device)
-                for seq_len in seq_lengths
-            ]
-        )
+        for i, seq_len in enumerate(
+            seq_lengths.tolist()
+        ):  # Convert to list only for iteration
+            batch_indices.extend([i] * seq_len)
+            position_indices.extend(list(range(seq_len)))
+
+        batch_indices = torch.tensor(batch_indices, device=device)
+        position_indices = torch.tensor(position_indices, device=device)
 
         batched_q = torch.zeros(
             (batch_size, max_seq_len, num_heads, head_dim), device=device, dtype=dtype
@@ -357,14 +357,17 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         """
         device = batched_output.device
 
-        seq_lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+        seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
 
-        batch_indices = torch.repeat_interleave(
-            torch.arange(len(seq_lengths), device=device), seq_lengths
-        )
-        position_indices = torch.cat(
-            [torch.arange(seq_len, device=device) for seq_len in seq_lengths]
-        )
+        batch_indices = []
+        position_indices = []
+
+        for i, seq_len in enumerate(seq_lengths):
+            batch_indices.extend([i] * seq_len)
+            position_indices.extend(list(range(seq_len)))
+
+        batch_indices = torch.tensor(batch_indices, device=device)
+        position_indices = torch.tensor(position_indices, device=device)
 
         packed_output = batched_output[batch_indices, position_indices]
 
