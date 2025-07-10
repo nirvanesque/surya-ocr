@@ -21,9 +21,11 @@ from surya.foundation.util import (
     detect_repeat_token,
 )
 from surya.common.surya.schema import TaskNames
-from surya.foundation.cache import (
+
+from surya.foundation.cache.dynamic import (  # noqa: F401
     ContinuousBatchingCache,
-)
+)  # noqa: F401
+from surya.foundation.cache.static import StaticOpsContinuousBatchingCache
 from surya.settings import settings
 from surya.logging import get_logger, configure_logging
 
@@ -136,7 +138,7 @@ class FoundationPredictor(BasePredictor):
             * self.model.config.sliding_window
         )
         max_cache_len = max_image_tokens + max_text_tokens
-        self.kv_cache = ContinuousBatchingCache(
+        self.kv_cache = StaticOpsContinuousBatchingCache(
             self.model.config,
             batch_size,
             max_cache_len,
@@ -426,7 +428,10 @@ class FoundationPredictor(BasePredictor):
         attention_mask = processed_inputs["attention_mask"].to(dtype=torch.long)
         position_ids = processed_inputs["position_ids"].to(dtype=torch.long)
         valid_batch_size = len(idxs_to_merge)
-        cache_idxs = idxs_to_merge
+        cache_idxs = torch.tensor(idxs_to_merge, device=self.model.device).to(
+            dtype=torch.long
+        )
+        cache_idxs_padded = cache_idxs
 
         if settings.FOUNDATION_STATIC_CACHE:
             input_ids = self.pad_to_batch_size(
@@ -438,8 +443,8 @@ class FoundationPredictor(BasePredictor):
             position_ids = self.pad_to_batch_size(
                 position_ids, batch_size=self.kv_cache.max_batch_size
             )
-            cache_idxs = cache_idxs + [-1] * (
-                self.kv_cache.max_batch_size - len(cache_idxs)
+            cache_idxs_padded = self.pad_to_batch_size(
+                cache_idxs, batch_size=self.kv_cache.max_batch_size, pad_value=-1
             )
 
         # Find text lengths of each
@@ -470,7 +475,7 @@ class FoundationPredictor(BasePredictor):
                 past_key_values=self.kv_cache,
                 use_cache=True,
                 encoder_chunk_size=self.get_encoder_chunk_size(),
-                cache_idxs=cache_idxs,
+                cache_idxs=cache_idxs_padded,
                 prefill=True,
                 num_valid_tokens=None,  # Not required during prefill
                 text_lengths=text_lengths,
@@ -495,7 +500,7 @@ class FoundationPredictor(BasePredictor):
 
         self.kv_cache.prefill_attention_mask_update(
             attention_mask,
-            idxs_to_merge,
+            cache_idxs,  # unpadded
             text_lengths[:valid_batch_size],
             image_lengths[:valid_batch_size],
         )
@@ -630,7 +635,6 @@ class FoundationPredictor(BasePredictor):
 
                 logger.debug(f"Prefill took {time.time() - start:.2f} seconds")
 
-                start = time.time()
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 token_probs_cpu = outputs.token_probs.cpu()
@@ -667,16 +671,14 @@ class FoundationPredictor(BasePredictor):
                                 self.batch_prompt_mapping[b_idx] = None
                                 pbar.update(1)
                                 break
-                logger.debug(f"Postprocessing took {time.time() - start:.2f} seconds")
             else:
                 start = time.time()
                 updated_inputs, outputs = self.decode(
                     current_inputs, max_lookahead_tokens=max_lookahead_tokens
                 )
                 mark_step()
-                logger.debug(f"Decoding took {time.time() - start:.2f} seconds")
+                logger.debug(f"Decode took {time.time() - start:.2f} seconds")
 
-                start = time.time()
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 token_probs_cpu = outputs.token_probs.cpu()
@@ -727,9 +729,6 @@ class FoundationPredictor(BasePredictor):
                         if should_stop:
                             self.batch_prompt_mapping[b_idx] = None
                             pbar.update(1)
-                logger.debug(
-                    f"Postprocessing decode took {time.time() - start:.2f} seconds"
-                )
 
             # Update inputs and mark XLA step
             current_inputs = updated_inputs

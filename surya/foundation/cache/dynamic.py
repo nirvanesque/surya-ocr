@@ -194,7 +194,6 @@ class ContinuousBatchingLayerCache(StaticCache):
 
         k_cache = self.key_cache  # (B, H, L, D)
         v_cache = self.value_cache  # (B, H, L, D)
-        max_valid_tokens = num_valid_tokens.max().item()
 
         existing_space = (
             self.text_sliding_window - self.text_token_counts
@@ -237,29 +236,21 @@ class ContinuousBatchingLayerCache(StaticCache):
                 k_cache[:, :, self.cache_image_end :, :], dim=2, index=shifted_indices
             )
 
-        B, H, L, D = k_cache.shape
+        for batch_idx, new_text_len in enumerate(num_valid_tokens):
+            cache_idx = batch_idx
+            new_text_len = num_valid_tokens[batch_idx]
 
-        t_range = torch.arange(max_valid_tokens, device=k_cache.device)  # (Tmax,)
-        valid_mask = t_range.unsqueeze(0) < num_valid_tokens.unsqueeze(1)  # (B,Tmax)
+            insert_position = insert_positions[batch_idx]
+            end_position = insert_position + new_text_len
 
-        batch_idx, tok_off = valid_mask.nonzero(as_tuple=True)  # (Nvalid,)
-        batch_idx = batch_idx.repeat_interleave(H)  # (Nvalid·H)
-        tok_off = tok_off.repeat_interleave(H)
-        head_idx = torch.arange(H, device=k_cache.device).repeat(valid_mask.sum())
+            k_new = key_states[batch_idx, :, -new_text_len:, :]
+            v_new = value_states[batch_idx, :, -new_text_len:, :]
 
-        seq_idx = insert_positions[batch_idx] + tok_off  # (Nvalid·H)
+            if new_text_len > 0:
+                k_cache[cache_idx, :, insert_position:end_position] = k_new
+                v_cache[cache_idx, :, insert_position:end_position] = v_new
+                self.text_token_counts[cache_idx] += new_text_len
 
-        src_idx = (
-            key_states.size(2) - num_valid_tokens[batch_idx] + tok_off
-        )  # (Nvalid·H)
-
-        k_sel = key_states[batch_idx, head_idx, src_idx, :]  # (Nvalid·H, D)
-        v_sel = value_states[batch_idx, head_idx, src_idx, :]
-
-        k_cache.index_put_((batch_idx, head_idx, seq_idx), k_sel, accumulate=False)
-        v_cache.index_put_((batch_idx, head_idx, seq_idx), v_sel, accumulate=False)
-
-        self.text_token_counts += num_valid_tokens
         self.text_token_counts.clamp_(max=self.text_sliding_window)
 
         # These were passed in as self.key_cache and self.value_cache, so we return them to match the interface
@@ -330,7 +321,7 @@ class ContinuousBatchingCache:
     def prefill_attention_mask_update(
         self,
         attention_mask: torch.Tensor,
-        cache_idxs: List[int],
+        cache_idxs: torch.Tensor,
         text_lengths: List[int],
         image_lengths: List[int],
     ):

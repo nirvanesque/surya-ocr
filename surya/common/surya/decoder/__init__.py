@@ -158,7 +158,7 @@ class Qwen2Attention(nn.Module):
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        cache_idxs: Optional[List[int]] = None,
+        cache_idxs: Optional[torch.Tensor] = None,  # padded
         num_valid_tokens: Optional[List[int]] = None,
         text_lengths: Optional[List[int]] = None,
         prefill: bool = False,
@@ -183,7 +183,7 @@ class Qwen2Attention(nn.Module):
             # Recompiles without this
             # We pass in a padded cache_idxs, so we need to compute the length of the cache
             cache_idx_length = (
-                len([c for c in cache_idxs if c != -1]) if cache_idxs is not None else 0
+                torch.count_nonzero(cache_idxs > -1) if cache_idxs is not None else 0
             )
 
             cache_kwargs = {
@@ -288,7 +288,7 @@ class Qwen2DecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
-        cache_idxs: Optional[List[int]] = None,
+        cache_idxs: Optional[torch.Tensor] = None,
         num_valid_tokens: Optional[List[int]] = None,
         text_lengths: Optional[List[int]] = None,
         prefill: bool = False,
@@ -473,7 +473,7 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        cache_idxs: Optional[List[int]] = None,
+        cache_idxs: Optional[torch.Tensor] = None,
         num_valid_tokens: Optional[List[int]] = None,
         text_lengths: Optional[List[int]] = None,
         prefill: bool = False,

@@ -297,7 +297,7 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
 
         # Vectorized approach
         batch_indices = torch.repeat_interleave(
-            torch.arange(len(seq_lengths), device=seq_lengths.device), seq_lengths
+            torch.arange(seq_lengths.shape[0], device=seq_lengths.device), seq_lengths
         )
 
         position_indices = torch.cat(
