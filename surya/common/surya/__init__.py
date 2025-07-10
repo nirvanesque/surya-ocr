@@ -1,3 +1,4 @@
+import time
 from typing import Optional, Tuple, TypedDict
 from dataclasses import dataclass
 
@@ -14,7 +15,7 @@ from surya.common.surya.config import SuryaModelConfig
 from surya.common.surya.decoder import SuryaDecoderModel
 from surya.common.surya.embedder import SimpleTokenEmbedder
 from surya.common.surya.encoder import SuryaEncoderModel
-from surya.common.xla import get_nearest_pad
+from surya.common.xla import get_nearest_pad, mark_step
 from surya.settings import settings
 
 from transformers.utils import is_flash_attn_2_available
@@ -206,14 +207,17 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         pixel_values: torch.Tensor,
         grid_thw: torch.Tensor,
         encoder_chunk_size: int | None,
+        image_tile_length: torch.Tensor | None = None,
+        valid_batch_size: torch.Tensor | None = None,
     ):
         # embed all images with the vision encoder after they have already been tiled and flattened into a single batch
         chunks = [0]
         grid_chunks = [0]
         curr_chunk_len = 0
         curr_seq_len = 0
+        grid_thw = grid_thw
         grid_thw_list = grid_thw.tolist()
-        for i in range(len(grid_thw_list)):
+        for i in range(len(grid_thw_list[:valid_batch_size])):
             curr_sample_len = (
                 grid_thw_list[i][0] * grid_thw_list[i][1] * grid_thw_list[i][2]
             )
@@ -230,11 +234,11 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             curr_chunk_len += curr_sample_len
 
         if curr_chunk_len > 0:
-            chunks.append(pixel_values.shape[0])
-            grid_chunks.append(len(grid_thw))
+            chunks.append(image_tile_length)
+            grid_chunks.append(valid_batch_size)
 
-        assert curr_chunk_len + curr_seq_len == pixel_values.shape[0], (
-            f"Mismatch in encoder chunking, {curr_chunk_len} + {curr_seq_len} != {pixel_values.shape[0]}"
+        assert curr_chunk_len + curr_seq_len == image_tile_length, (
+            f"Mismatch in encoder chunking, {curr_chunk_len} + {curr_seq_len} != {image_tile_length}"
         )
 
         logger.debug(
@@ -275,6 +279,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
 
         encoding_2d = self.get_2d_learned_embeddings(
             grid_thw,
+            valid_batch_size=valid_batch_size,
             device=embeddings.device,
             bbox_size=self.config.image_embed_encoding_multiplier,
         )
@@ -290,7 +295,13 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         return embeddings
 
     def embed_ids_boxes_images(
-        self, input_ids, pixel_values, grid_thw, encoder_chunk_size: int
+        self,
+        input_ids,
+        pixel_values,
+        grid_thw,
+        encoder_chunk_size: int,
+        image_tile_length: torch.Tensor | None = None,
+        valid_batch_size: torch.Tensor | None = None,
     ):
         """
         Insert embedded image tiles into the corresponding positions into the full input sequence
@@ -304,14 +315,14 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 pixel_values=pixel_values,
                 grid_thw=grid_thw,
                 encoder_chunk_size=encoder_chunk_size,
+                image_tile_length=image_tile_length,
+                valid_batch_size=valid_batch_size,
             )
 
-            special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
-            special_image_mask = special_image_mask.expand_as(inputs_embeds)
-            image_features = image_features.to(inputs_embeds.dtype)
-            inputs_embeds = inputs_embeds.masked_scatter(
-                special_image_mask, image_features
+            image_positions = (input_ids == self.config.image_token_id).nonzero(
+                as_tuple=True
             )
+            inputs_embeds[image_positions] = image_features.to(inputs_embeds.dtype)
         else:
             assert (input_ids == self.config.image_token_id).sum() == 0, (
                 "Image tokens were present in the input but no input images were provided"
@@ -322,26 +333,27 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     def get_2d_learned_embeddings(
         self,
         grid_thw,
+        valid_batch_size: int,
         device: str | torch.device = "cpu",
         bbox_size: int = 256,
     ):
         all_embeddings = []
-        grid_thw_list = grid_thw.tolist()
-        for grid_t, grid_h, grid_w in grid_thw_list:
-            llm_grid_h, llm_grid_w = (
-                grid_h // self.config.merge_size,
-                grid_w // self.config.merge_size,
-            )
+        grid_thw = grid_thw[
+            :valid_batch_size
+        ]  # Ensure we only use the valid batch size
+        grid_h = grid_thw[:, 1] // self.config.merge_size
+        grid_w = grid_thw[:, 2] // self.config.merge_size
 
+        for i in range(valid_batch_size):
             # Scale to 0-1024
             llm_grid_h = (
-                torch.arange(llm_grid_h, device=device)
-                / max(1, (llm_grid_h - 1))
+                torch.arange(grid_h[i], device=device)
+                / max(1, (grid_h[i] - 1))
                 * bbox_size
             )
             llm_grid_w = (
-                torch.arange(llm_grid_w, device=device)
-                / max(1, (llm_grid_w - 1))
+                torch.arange(grid_w[i], device=device)
+                / max(1, (grid_w[i] - 1))
                 * bbox_size
             )
 
@@ -406,12 +418,19 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         num_valid_tokens=None,
         prefill=False,
         text_lengths=None,
+        image_tile_length: torch.Tensor = None,
+        valid_batch_size: torch.Tensor = None,
         **kwargs: KwargsForCausalLM,
     ):
         # Process the mixed batch if provided
         if inputs_embeds is None:
             inputs_embeds = self.embed_ids_boxes_images(
-                input_ids, image_tiles, grid_thw, encoder_chunk_size
+                input_ids,
+                image_tiles,
+                grid_thw,
+                encoder_chunk_size,
+                image_tile_length,
+                valid_batch_size,
             )
 
         # Handling flash attention kwargs outside the decoder to speed up + avoid graph breaks inside the decoder
@@ -452,6 +471,9 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         logger.debug(
             f"Running decoder with attention mask shape: {attention_mask.shape}"
         )
+        mark_step()
+        start = time.time()
+
         outputs = self.decoder(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
@@ -466,6 +488,8 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             text_lengths=text_lengths,
             **kwargs,
         )
+        mark_step()
+        logger.debug(f"Decoder forward took {time.time() - start:.2f} seconds")
 
         hidden_states = outputs.last_hidden_state
         # Only keep the last `logits_to_keep` logits, should bring down memory usage during inference

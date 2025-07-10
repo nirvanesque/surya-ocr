@@ -8,11 +8,10 @@ else:
     xm = None
 
 
-def get_nearest_pad(length: int):
-    return (
-        math.ceil(length / settings.FOUNDATION_PAD_TO_NEAREST)
-        * settings.FOUNDATION_PAD_TO_NEAREST
-    )
+def get_nearest_pad(
+    length: int, pad_multiple: int = settings.FOUNDATION_PAD_TO_NEAREST
+):
+    return math.ceil(length / pad_multiple) * pad_multiple
 
 
 def mark_step():

@@ -88,21 +88,18 @@ class ContinuousBatchingLayerCache(StaticCache):
         value_states: torch.Tensor,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        cache_idxs: List[int] = cache_kwargs.get("cache_idxs", None)
+        cache_idxs: torch.Tensor = cache_kwargs.get("cache_idxs", None)
         cache_idx_length: int = cache_kwargs.get("cache_idx_length", None)
-        text_lengths: List[int] = cache_kwargs.get("text_lengths", None)
+        text_lengths: torch.Tensor = cache_kwargs.get("text_lengths", None)
         assert cache_idxs is not None, "cache_idxs must be specified during prefill"
         assert text_lengths is not None, "text_lengths must be specified during prefill"
 
         # Get cache dimensions
         seq_len = key_states.shape[2]
-
-        text_lengths_tensor = torch.tensor(
-            text_lengths[:cache_idx_length], device=key_states.device
-        )
+        text_lengths = text_lengths[:cache_idx_length]
 
         # Calculate dimensions for each batch item
-        state_image_ends = seq_len - text_lengths_tensor
+        state_image_ends = seq_len - text_lengths
         cache_image_starts = self.cache_image_end - state_image_ends
 
         # Process image tokens
@@ -322,10 +319,11 @@ class ContinuousBatchingCache:
         self,
         attention_mask: torch.Tensor,
         cache_idxs: torch.Tensor,
-        text_lengths: List[int],
-        image_lengths: List[int],
+        text_lengths: torch.Tensor,
+        image_lengths: torch.Tensor,
+        cache_idxs_length: torch.Tensor,
     ):
-        for batch_idx, cache_idx in enumerate(cache_idxs):
+        for batch_idx, cache_idx in enumerate(cache_idxs[:cache_idxs_length]):
             text_len = text_lengths[batch_idx]
             image_len = image_lengths[batch_idx]
             valid_mask_length = text_len + image_len

@@ -13,7 +13,7 @@ from PIL import Image
 from tqdm import tqdm
 import torch.nn.functional as F
 
-from surya.common.xla import mark_step
+from surya.common.xla import mark_step, get_nearest_pad
 from surya.common.predictor import BasePredictor
 
 from surya.foundation.loader import FoundationModelLoader
@@ -67,11 +67,10 @@ class FoundationPredictor(BasePredictor):
         settings.RECOGNITION_BATCH_SIZE
     )  # Default to the recognition batch size
     torch_dtype = None  # No default, loader picks the dtype based on device properties - bf16/fp16
-    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 128}
+    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 64}
     encoder_chunk_size: int = 4096  # Default chunk size
     encoder_chunk_sizes = {"cpu": 4096, "mps": 4096, "cuda": 32768, "xla": 4096}
-    min_prefill_ratio: int = 0.2
-    min_trim_length: int = 50
+    min_prefill_ratio: int = 0.8
     tasks = {
         TaskNames.ocr_with_boxes: {
             "needs_bboxes": True,
@@ -90,7 +89,7 @@ class FoundationPredictor(BasePredictor):
         },
         TaskNames.layout: {
             "needs_bboxes": False,
-            "img_size": (1024, 1024),
+            "img_size": (1024, 1024),  # 1369 max tokens
             "max_tokens": 200,
         },
     }
@@ -317,6 +316,7 @@ class FoundationPredictor(BasePredictor):
             num_valid_tokens=num_valid_tokens, cache_idxs=list(range(batch_size))
         )
         with settings.INFERENCE_MODE():
+            start = time.time()
             outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=self.kv_cache.attention_mask,
@@ -326,6 +326,7 @@ class FoundationPredictor(BasePredictor):
                 prefill=False,
                 num_valid_tokens=num_valid_tokens,
             )
+            print(f"Decode model call took {time.time() - start:.2f} seconds")
 
         processed_output: ContinuousBatchOutput = self.process_outputs(
             outputs, max_lookahead_tokens=max_lookahead_tokens
@@ -432,6 +433,9 @@ class FoundationPredictor(BasePredictor):
             dtype=torch.long
         )
         cache_idxs_padded = cache_idxs
+        image_tile_length = torch.tensor(image_tiles.shape[0]).to(
+            dtype=torch.long, device=self.model.device
+        )
 
         if settings.FOUNDATION_STATIC_CACHE:
             input_ids = self.pad_to_batch_size(
@@ -447,13 +451,25 @@ class FoundationPredictor(BasePredictor):
                 cache_idxs, batch_size=self.kv_cache.max_batch_size, pad_value=-1
             )
 
+            image_tile_pad = get_nearest_pad(
+                image_tiles.shape[0], settings.FOUNDATION_PAD_TO_NEAREST * 32
+            )
+            image_tiles = self.pad_to_batch_size(image_tiles, batch_size=image_tile_pad)
+            grid_thw = self.pad_to_batch_size(
+                grid_thw, batch_size=self.kv_cache.max_batch_size
+            )
+
         # Find text lengths of each
         is_special = (input_ids.unsqueeze(-1) == self.special_token_ids).any(
             -1
         )  # (batch, seq_len)
         special_positions = is_special.nonzero().tolist()  # (num_special, 2)
-        text_lengths = []
-        image_lengths = []
+        text_lengths = torch.zeros(cache_idxs_padded.shape[0], dtype=torch.long).to(
+            self.model.device
+        )  # This will be padded or unpadded based on cache_idxs
+        image_lengths = torch.zeros(cache_idxs_padded.shape[0], dtype=torch.long).to(
+            self.model.device
+        )  # This will be padded or unpadded based on cache_idxs
         for i in range(input_ids.shape[0]):
             row_special_positions = [pos for b, pos in special_positions if b == i]
             if len(row_special_positions) > 0:
@@ -461,10 +477,13 @@ class FoundationPredictor(BasePredictor):
                 prefix_len = row_special_positions[-1] + 1
             else:
                 prefix_len = 0
-            text_lengths.append(input_ids.shape[1] - prefix_len)
-            image_lengths.append(prefix_len)
+            text_lengths[i] = input_ids.shape[1] - prefix_len
+            image_lengths[i] = prefix_len
 
         with settings.INFERENCE_MODE():
+            logger.debug(
+                f"Prefill shapes: input_ids={input_ids.shape}, image_tiles={image_tiles.shape},  grid_thw={grid_thw.shape}, attention_mask={attention_mask.shape}, position_ids={position_ids.shape}, cache_idxs_padded={cache_idxs_padded.shape}"
+            )
             outputs = self.model(
                 input_ids=input_ids,
                 image_tiles=image_tiles,
@@ -479,6 +498,10 @@ class FoundationPredictor(BasePredictor):
                 prefill=True,
                 num_valid_tokens=None,  # Not required during prefill
                 text_lengths=text_lengths,
+                image_tile_length=image_tile_length,
+                valid_batch_size=torch.tensor(
+                    valid_batch_size, device=self.model.device, dtype=torch.long
+                ),
             )
 
         # Process outputs
@@ -500,9 +523,10 @@ class FoundationPredictor(BasePredictor):
 
         self.kv_cache.prefill_attention_mask_update(
             attention_mask,
-            cache_idxs,  # unpadded
-            text_lengths[:valid_batch_size],
-            image_lengths[:valid_batch_size],
+            cache_idxs_padded,  # unpadded
+            text_lengths,
+            image_lengths,  # These can be unpadded, since we use cache_idxs later
+            torch.tensor([valid_batch_size]).to(self.model.device),
         )
 
         if current_inputs is None:
