@@ -338,22 +338,23 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         bbox_size: int = 256,
     ):
         all_embeddings = []
-        grid_thw = grid_thw[
-            :valid_batch_size
-        ]  # Ensure we only use the valid batch size
-        grid_h = grid_thw[:, 1] // self.config.merge_size
-        grid_w = grid_thw[:, 2] // self.config.merge_size
+        grid_thw = grid_thw[:valid_batch_size]
+        grid_thw_list = grid_thw.tolist()
+        for grid_t, grid_h, grid_w in grid_thw_list:
+            llm_grid_h, llm_grid_w = (
+                grid_h // self.config.merge_size,
+                grid_w // self.config.merge_size,
+            )
 
-        for i in range(valid_batch_size):
             # Scale to 0-1024
             llm_grid_h = (
-                torch.arange(grid_h[i], device=device)
-                / max(1, (grid_h[i] - 1))
+                torch.arange(llm_grid_h, device=device)
+                / max(1, (llm_grid_h - 1))
                 * bbox_size
             )
             llm_grid_w = (
-                torch.arange(grid_w[i], device=device)
-                / max(1, (grid_w[i] - 1))
+                torch.arange(llm_grid_w, device=device)
+                / max(1, (llm_grid_w - 1))
                 * bbox_size
             )
 
@@ -364,11 +365,8 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             llm_grid_h = self.img_h_embed(llm_grid_h_idx)
 
             full_grid = llm_grid_h[:, None] + llm_grid_w[None, :]
-
-            flattened = full_grid.flatten(
-                0, 1
-            )  # Flatten first dimension, so they are seq_len x embed_dim
-            all_embeddings.append(flattened)
+            full_grid = full_grid.reshape(-1, self.config.hidden_size)
+            all_embeddings.append(full_grid)
         return torch.concat(
             all_embeddings, dim=0
         )  # Shape is num_image_tokens x embed_dim
