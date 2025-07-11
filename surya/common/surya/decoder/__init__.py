@@ -360,7 +360,7 @@ class Qwen2RotaryEmbedding(nn.Module):
             .expand(position_ids.shape[0], -1, 1)
             .to(x.device)
         )
-        position_ids_expanded = position_ids[:, None, :]
+        position_ids_expanded = position_ids[:, None, :].to(x.dtype)
 
         freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
         emb = torch.cat((freqs, freqs), dim=-1)

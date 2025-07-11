@@ -1,4 +1,3 @@
-import time
 from typing import Optional, Tuple, TypedDict
 from dataclasses import dataclass
 
@@ -15,7 +14,7 @@ from surya.common.surya.config import SuryaModelConfig
 from surya.common.surya.decoder import SuryaDecoderModel
 from surya.common.surya.embedder import SimpleTokenEmbedder
 from surya.common.surya.encoder import SuryaEncoderModel
-from surya.common.xla import get_nearest_pad, mark_step
+from surya.common.xla import get_nearest_pad
 from surya.settings import settings
 
 from transformers.utils import is_flash_attn_2_available
@@ -319,10 +318,16 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 valid_batch_size=valid_batch_size,
             )
 
-            image_positions = (input_ids == self.config.image_token_id).nonzero(
-                as_tuple=True
+            mask = input_ids == self.config.image_token_id  # bool
+            flat = inputs_embeds.view(-1, inputs_embeds.size(-1))  # (B·L) x D
+            flat_mask = mask.view(-1)  # (B·L)
+            flat.index_copy_(
+                0,
+                flat_mask.nonzero(as_tuple=False).squeeze(1),
+                image_features.to(flat.dtype),
             )
-            inputs_embeds[image_positions] = image_features.to(inputs_embeds.dtype)
+
+            inputs_embeds = flat.view_as(inputs_embeds)
         else:
             assert (input_ids == self.config.image_token_id).sum() == 0, (
                 "Image tokens were present in the input but no input images were provided"
@@ -337,39 +342,34 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         device: str | torch.device = "cpu",
         bbox_size: int = 256,
     ):
-        all_embeddings = []
-        grid_thw = grid_thw[:valid_batch_size]
-        grid_thw_list = grid_thw.tolist()
-        for grid_t, grid_h, grid_w in grid_thw_list:
-            llm_grid_h, llm_grid_w = (
-                grid_h // self.config.merge_size,
-                grid_w // self.config.merge_size,
-            )
+        grid_thw = grid_thw[:valid_batch_size]  # ────── (B,3)
+        dev = grid_thw.device
+        merge = self.config.merge_size
 
-            # Scale to 0-1024
-            llm_grid_h = (
-                torch.arange(llm_grid_h, device=device)
-                / max(1, (llm_grid_h - 1))
-                * bbox_size
-            )
-            llm_grid_w = (
-                torch.arange(llm_grid_w, device=device)
-                / max(1, (llm_grid_w - 1))
-                * bbox_size
-            )
+        # per-sample grid sizes after merge
+        H = (grid_thw[:, 1] // merge).long()  # (B,)
+        W = (grid_thw[:, 2] // merge).long()  # (B,)
 
-            llm_grid_w_idx = llm_grid_w.to(torch.long)
-            llm_grid_h_idx = llm_grid_h.to(torch.long)
+        row_coords = torch.cat(
+            [
+                torch.linspace(0, bbox_size, steps=int(h), device=dev)
+                .round()
+                .repeat_interleave(w)  # repeat each row value w times
+                for h, w in zip(H.tolist(), W.tolist())
+            ]
+        )  # (full_grid_size,)
 
-            llm_grid_w = self.img_w_embed(llm_grid_w_idx)
-            llm_grid_h = self.img_h_embed(llm_grid_h_idx)
+        col_coords = torch.cat(
+            [
+                torch.linspace(0, bbox_size, steps=int(w), device=dev)
+                .round()
+                .repeat(int(h))  # tile the column vector h times
+                for h, w in zip(H.tolist(), W.tolist())
+            ]
+        )  # (full_grid_size,)
 
-            full_grid = llm_grid_h[:, None] + llm_grid_w[None, :]
-            full_grid = full_grid.reshape(-1, self.config.hidden_size)
-            all_embeddings.append(full_grid)
-        return torch.concat(
-            all_embeddings, dim=0
-        )  # Shape is num_image_tokens x embed_dim
+        emb = self.img_h_embed(row_coords.long()) + self.img_w_embed(col_coords.long())
+        return emb
 
     def get_logits(self, hidden_states):
         assert hidden_states.shape[1] == 1, (
@@ -466,12 +466,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         )
 
         attention_mask = causal_mask
-        logger.debug(
-            f"Running decoder with attention mask shape: {attention_mask.shape}"
-        )
-        mark_step()
-        start = time.time()
-
         outputs = self.decoder(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
@@ -486,8 +480,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             text_lengths=text_lengths,
             **kwargs,
         )
-        mark_step()
-        logger.debug(f"Decoder forward took {time.time() - start:.2f} seconds")
 
         hidden_states = outputs.last_hidden_state
         # Only keep the last `logits_to_keep` logits, should bring down memory usage during inference

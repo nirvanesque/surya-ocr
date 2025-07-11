@@ -316,7 +316,6 @@ class FoundationPredictor(BasePredictor):
             num_valid_tokens=num_valid_tokens, cache_idxs=list(range(batch_size))
         )
         with settings.INFERENCE_MODE():
-            start = time.time()
             outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=self.kv_cache.attention_mask,
@@ -326,7 +325,6 @@ class FoundationPredictor(BasePredictor):
                 prefill=False,
                 num_valid_tokens=num_valid_tokens,
             )
-            print(f"Decode model call took {time.time() - start:.2f} seconds")
 
         processed_output: ContinuousBatchOutput = self.process_outputs(
             outputs, max_lookahead_tokens=max_lookahead_tokens
@@ -503,6 +501,8 @@ class FoundationPredictor(BasePredictor):
                     valid_batch_size, device=self.model.device, dtype=torch.long
                 ),
             )
+            # import torch_xla.core.xla_model as xm
+            # print(xm.get_metrics_report())
 
         # Process outputs
         processed_outputs = self.process_outputs(
@@ -696,12 +696,10 @@ class FoundationPredictor(BasePredictor):
                                 pbar.update(1)
                                 break
             else:
-                start = time.time()
                 updated_inputs, outputs = self.decode(
                     current_inputs, max_lookahead_tokens=max_lookahead_tokens
                 )
                 mark_step()
-                logger.debug(f"Decode took {time.time() - start:.2f} seconds")
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
