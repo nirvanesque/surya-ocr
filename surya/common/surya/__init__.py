@@ -309,6 +309,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         """
         # This is batched in the inner call
         inputs_embeds = self.embedder.embed(input_tokens=input_ids)
+
         if pixel_values is not None:
             image_features = self.get_image_embeddings(
                 pixel_values=pixel_values,
@@ -318,7 +319,9 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 valid_batch_size=valid_batch_size,
             )
 
-            mask = input_ids == self.config.image_token_id  # bool
+            mask = input_ids == torch.tensor(
+                self.config.image_token_id, device=pixel_values.device, dtype=torch.long
+            )  # bool
             flat = inputs_embeds.view(-1, inputs_embeds.size(-1))  # (B·L) x D
             flat_mask = mask.view(-1)  # (B·L)
             flat.index_copy_(

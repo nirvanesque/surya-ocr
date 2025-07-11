@@ -457,26 +457,16 @@ class FoundationPredictor(BasePredictor):
                 grid_thw, batch_size=self.kv_cache.max_batch_size
             )
 
-        # Find text lengths of each
-        is_special = (input_ids.unsqueeze(-1) == self.special_token_ids).any(
-            -1
-        )  # (batch, seq_len)
-        special_positions = is_special.nonzero().tolist()  # (num_special, 2)
-        text_lengths = torch.zeros(cache_idxs_padded.shape[0], dtype=torch.long).to(
-            self.model.device
-        )  # This will be padded or unpadded based on cache_idxs
-        image_lengths = torch.zeros(cache_idxs_padded.shape[0], dtype=torch.long).to(
-            self.model.device
-        )  # This will be padded or unpadded based on cache_idxs
-        for i in range(input_ids.shape[0]):
-            row_special_positions = [pos for b, pos in special_positions if b == i]
-            if len(row_special_positions) > 0:
-                # Assuming special tokens are contiguous at the start
-                prefix_len = row_special_positions[-1] + 1
-            else:
-                prefix_len = 0
-            text_lengths[i] = input_ids.shape[1] - prefix_len
-            image_lengths[i] = prefix_len
+        is_special = (
+            input_ids.unsqueeze(-1).eq(self.special_token_ids).any(-1)
+        )  # (B, L) bool
+
+        idx = torch.arange(input_ids.size(1), device=input_ids.device) + 1  # 1…L
+        special_length = is_special.sum(dim=1)  # (B,) number of special tokens
+        last_special_plus1 = (is_special * idx).max(dim=1).values  # (B,) 0 if none
+
+        image_lengths = special_length  # (B,)
+        text_lengths = input_ids.size(1) - last_special_plus1  # (B,)
 
         with settings.INFERENCE_MODE():
             logger.debug(
