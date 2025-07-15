@@ -69,7 +69,7 @@ class FoundationPredictor(BasePredictor):
     torch_dtype = None  # No default, loader picks the dtype based on device properties - bf16/fp16
     default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 64}
     encoder_chunk_size: int = 4096  # Default chunk size
-    encoder_chunk_sizes = {"cpu": 4096, "mps": 4096, "cuda": 32768, "xla": 32768}
+    encoder_chunk_sizes = {"cpu": 4096, "mps": 4096, "cuda": 32768, "xla": 4096}
     min_prefill_ratio: int = 0.8
     tasks = {
         TaskNames.ocr_with_boxes: {
@@ -419,16 +419,22 @@ class FoundationPredictor(BasePredictor):
             padding_side="left",
             device=self.model.device,
             pad_to_multiple=self.pad_to_multiple,
-        ).to(device=self.model.device)
+        )
 
-        input_ids = processed_inputs["input_ids"].to(dtype=torch.long)
+        input_ids = processed_inputs["input_ids"].to(
+            device=self.model.device, dtype=torch.long
+        )
         image_tiles = processed_inputs["image_tiles"].to(dtype=self.model.dtype)
         grid_thw = processed_inputs["grid_thw"].to(dtype=torch.long)
-        attention_mask = processed_inputs["attention_mask"].to(dtype=torch.long)
-        position_ids = processed_inputs["position_ids"].to(dtype=torch.long)
+        attention_mask = processed_inputs["attention_mask"].to(
+            device=self.model.device, dtype=torch.long
+        )
+        position_ids = processed_inputs["position_ids"].to(
+            device=self.model.device, dtype=torch.long
+        )
         valid_batch_size = len(idxs_to_merge)
-        cache_idxs = torch.tensor(idxs_to_merge, device=self.model.device).to(
-            dtype=torch.long
+        cache_idxs = torch.tensor(
+            idxs_to_merge, device=self.model.device, dtype=torch.long
         )
         cache_idxs_padded = cache_idxs
         image_tile_length = torch.tensor(image_tiles.shape[0]).to(

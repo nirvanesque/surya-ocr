@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.utils import is_flash_attn_2_available
@@ -144,12 +145,13 @@ def apply_rotary_pos_emb_flashatt(
     return q_embed, k_embed
 
 
-class Qwen2_5_VLVisionXLAFlashAttention2_1(nn.Module):
+class Qwen2_5_VLVisionXLASDPAFlashAttention2(nn.Module):
     def __init__(self, dim: int, num_heads: int = 16) -> None:
         super().__init__()
         self.num_heads = num_heads
         self.qkv = nn.Linear(dim, dim * 3, bias=True)
         self.proj = nn.Linear(dim, dim)
+        self.head_dim = dim // num_heads
 
     def forward(
         self,
@@ -191,13 +193,15 @@ class Qwen2_5_VLVisionXLAFlashAttention2_1(nn.Module):
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
-        attn_output = F.scaled_dot_product_attention(
-            q.unsqueeze(0),
-            k.unsqueeze(0),
-            v.unsqueeze(0),
-            attention_mask,
-            dropout_p=0.0,
-        )
+
+        with sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]):
+            attn_output = F.scaled_dot_product_attention(
+                q.unsqueeze(0),
+                k.unsqueeze(0),
+                v.unsqueeze(0),
+                attention_mask,
+                dropout_p=0.0,
+            )
         attn_output = attn_output.squeeze(0).transpose(0, 1)
         attn_output = attn_output.reshape(seq_length, -1)
         attn_output = self.proj(attn_output)
@@ -304,9 +308,6 @@ class Qwen2_5_VLVisionXLAFlashAttention2(nn.Module):
             segment_ids[cu_seqlens[i - 1] : cu_seqlens[i]] = i - 1
         segment_ids = segment_ids.reshape(1, -1)
 
-        print(
-            f"Shapes are {q.shape}, {k.shape}, {v.shape}, segment_ids: {segment_ids.shape}"
-        )
         attn_output = torch_xla.experimental.custom_kernel.flash_attention(
             q, k, v, q_segment_ids=segment_ids, kv_segment_ids=segment_ids
         ).reshape(seq_length, -1)
@@ -581,9 +582,7 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        print(
-            f"Shapes: q: {q.shape}, k: {k.shape}, v: {v.shape}, attention_mask: {attention_mask.shape}"
-        )
+
         attn_output = F.scaled_dot_product_attention(
             q,
             k,
@@ -603,7 +602,7 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
 QWEN2_5_VL_VISION_ATTENTION_CLASSES = {
     "eager": Qwen2_5_VLVisionAttention,
     "flash_attention_2": Qwen2_5_VLVisionFlashAttention2,
-    "flash_attention_xla": Qwen2_5_VLVisionXLAFlashAttention2,
+    "flash_attention_xla": Qwen2_5_VLVisionSdpaAttention,
     "sdpa": Qwen2_5_VLVisionSdpaAttention,
 }
 
@@ -789,7 +788,10 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         return window_index, cu_window_seqlens
 
     def forward(
-        self, hidden_states: torch.Tensor, grid_thw: torch.Tensor
+        self,
+        hidden_states: torch.Tensor,
+        grid_thw: torch.Tensor,
+        valid_grid_len: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -801,6 +803,9 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         Returns:
             `torch.Tensor`: hidden_states.
         """
+        if valid_grid_len is not None:
+            grid_thw = grid_thw[:valid_grid_len]
+
         hidden_states = self.patch_embed(hidden_states)
 
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
@@ -885,9 +890,13 @@ class SuryaEncoderModel(Qwen2_5_VisionTransformerPretrainedModel):
         return config.hidden_size
 
     def embed_images(
-        self, image_batch: torch.Tensor, grid_thw: torch.Tensor
+        self,
+        image_batch: torch.Tensor,
+        grid_thw: torch.Tensor,
+        valid_grid_len: torch.Tensor | None = None,
     ) -> torch.Tensor:
         return super().forward(
             hidden_states=image_batch,
             grid_thw=grid_thw,
+            valid_grid_len=valid_grid_len,
         )

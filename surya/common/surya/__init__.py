@@ -203,27 +203,32 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         grid_chunks = [0]
         curr_chunk_len = 0
         curr_seq_len = 0
-        grid_thw = grid_thw
-        grid_thw_list = grid_thw.tolist()
-        for i in range(len(grid_thw_list[:valid_batch_size])):
-            curr_sample_len = (
-                grid_thw_list[i][0] * grid_thw_list[i][1] * grid_thw_list[i][2]
-            )
+        chunk_tokens = []
+        grid_chunk_size = []
+        curr_grid_len = 0
+        for i in range(len(grid_thw[:valid_batch_size])):
+            curr_sample_len = grid_thw[i][0] * grid_thw[i][1] * grid_thw[i][2]
 
             if (
                 curr_chunk_len > (encoder_chunk_size - curr_sample_len)
                 and curr_chunk_len > 0
             ):
+                chunk_tokens.append(curr_chunk_len)
                 chunks.append(curr_chunk_len + curr_seq_len)
                 curr_seq_len += curr_chunk_len
                 curr_chunk_len = 0
                 grid_chunks.append(i)
+                grid_chunk_size.append(curr_grid_len)
+                curr_grid_len = 0
 
             curr_chunk_len += curr_sample_len
+            curr_grid_len += 1
 
         if curr_chunk_len > 0:
             chunks.append(image_tile_length)
             grid_chunks.append(valid_batch_size)
+            chunk_tokens.append(curr_chunk_len)
+            grid_chunk_size.append(curr_grid_len)
 
         assert curr_chunk_len + curr_seq_len == image_tile_length, (
             f"Mismatch in encoder chunking, {curr_chunk_len} + {curr_seq_len} != {image_tile_length}"
@@ -232,7 +237,16 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         logger.debug(
             f"Chunking encoder sequence into {len(chunks) - 1} chunks of size {encoder_chunk_size} with lengths {chunks} and grids {grid_chunks}"
         )
-        embeddings = []
+
+        final_length = image_tile_length // 4
+        embeddings = torch.zeros(
+            final_length,
+            self.vision_encoder.config.hidden_size,
+            dtype=pixel_values.dtype,
+            device=self.device,
+        )
+        out_start = 0
+        grid_thw = grid_thw.to(self.device)
         for i in range(len(chunks) - 1):
             start = chunks[i]
             end = chunks[i + 1]
@@ -252,18 +266,12 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             )
 
             chunk_embeddings = self.vision_encoder.embed_images(
-                image_batch=chunk_pixels, grid_thw=chunk_grid_thw
+                image_batch=chunk_pixels.to(self.device), grid_thw=chunk_grid_thw
             )
-            embeddings.append(chunk_embeddings[:valid_embed_len])
-
-        if len(embeddings) == 0:
-            raise ValueError(
-                "No image embeddings were generated. Check the input images and grid sizes."
-            )
-        elif len(embeddings) == 1:
-            embeddings = embeddings[0]
-        else:
-            embeddings = torch.cat(embeddings, dim=0)
+            embeddings[out_start : (out_start + valid_embed_len)] = chunk_embeddings[
+                :valid_embed_len
+            ]
+            out_start += valid_embed_len
 
         encoding_2d = self.get_2d_learned_embeddings(
             grid_thw,
@@ -279,7 +287,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         )
 
         embeddings = embeddings + encoding_2d
-
         return embeddings
 
     def embed_ids_boxes_images(
