@@ -14,7 +14,6 @@ from surya.common.surya.config import SuryaModelConfig
 from surya.common.surya.decoder import SuryaDecoderModel
 from surya.common.surya.embedder import SimpleTokenEmbedder
 from surya.common.surya.encoder import SuryaEncoderModel
-from surya.common.xla import get_nearest_pad
 from surya.settings import settings
 
 from transformers.utils import is_flash_attn_2_available
@@ -173,24 +172,14 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         valid_embed_len = actual_chunk_len // (
             self.vision_encoder.spatial_merge_size**2
         )
-        if (
-            settings.FOUNDATION_STATIC_CACHE
-            and actual_chunk_len % encoder_chunk_size != 0
-        ):
-            pad_to_nearest = get_nearest_pad(actual_chunk_len)
-
-            # Always pad to the nearest encoder chunk size if possible
-            if encoder_chunk_size > actual_chunk_len:
-                pad_to_nearest = encoder_chunk_size
-
-            padding_len = pad_to_nearest - actual_chunk_len
-            padding = torch.zeros(
-                padding_len,
-                *chunk_pixels.shape[1:],
-                device=chunk_pixels.device,
-                dtype=chunk_pixels.dtype,
+        if settings.FOUNDATION_STATIC_CACHE and actual_chunk_len < encoder_chunk_size:
+            padding_len = encoder_chunk_size - actual_chunk_len
+            chunk_pixels = F.pad(
+                chunk_pixels,
+                (0, 0, 0, padding_len),
+                mode="constant",
+                value=0.0,
             )
-            chunk_pixels = torch.cat([chunk_pixels, padding], dim=0)
 
             padding_grid = torch.tensor(
                 [[1, 2, padding_len // 2]],
@@ -296,10 +285,8 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     def embed_ids_boxes_images(
         self,
         input_ids,
-        pixel_values,
-        grid_thw,
+        image_embeddings,
         encoder_chunk_size: int,
-        image_tile_length: torch.Tensor | None = None,
         valid_batch_size: torch.Tensor | None = None,
     ):
         """
@@ -310,24 +297,19 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         # This is batched in the inner call
         inputs_embeds = self.embedder.embed(input_tokens=input_ids)
 
-        if pixel_values is not None:
-            image_features = self.get_image_embeddings(
-                pixel_values=pixel_values,
-                grid_thw=grid_thw,
-                encoder_chunk_size=encoder_chunk_size,
-                image_tile_length=image_tile_length,
-                valid_batch_size=valid_batch_size,
+        if image_embeddings is not None:
+            image_token_id_tensor = torch.tensor(
+                self.config.image_token_id,
+                device=image_embeddings.device,
+                dtype=torch.long,
             )
-
-            mask = input_ids == torch.tensor(
-                self.config.image_token_id, device=pixel_values.device, dtype=torch.long
-            )  # bool
+            mask = input_ids == image_token_id_tensor
             flat = inputs_embeds.view(-1, inputs_embeds.size(-1))  # (B·L) x D
             flat_mask = mask.view(-1)  # (B·L)
             flat.index_copy_(
                 0,
-                flat_mask.nonzero(as_tuple=False).squeeze(1),
-                image_features.to(flat.dtype),
+                flat_mask.nonzero(as_tuple=False).squeeze(1).to(torch.long),
+                image_embeddings.to(flat.dtype),
             )
 
             inputs_embeds = flat.view_as(inputs_embeds)
@@ -404,8 +386,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     def forward(
         self,
         input_ids=None,
-        image_tiles=None,
-        grid_thw=None,
+        image_embeddings=None,
         inputs_embeds=None,
         attention_mask=None,
         position_ids=None,
@@ -419,7 +400,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         num_valid_tokens=None,
         prefill=False,
         text_lengths=None,
-        image_tile_length: torch.Tensor = None,
         valid_batch_size: torch.Tensor = None,
         **kwargs: KwargsForCausalLM,
     ):
@@ -427,10 +407,8 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_ids_boxes_images(
                 input_ids,
-                image_tiles,
-                grid_thw,
+                image_embeddings,
                 encoder_chunk_size,
-                image_tile_length,
                 valid_batch_size,
             )
 

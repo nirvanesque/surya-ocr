@@ -44,6 +44,8 @@ class FoundationModelLoader(ModelLoader):
         if is_flash_attn_2_available() and is_flash_attn_2_supported(device):
             config.decoder._attn_implementation = "flash_attention_2"
             config.vision_encoder._attn_implementation = "flash_attention_2"
+        elif "xla" in str(device):
+            config.vision_encoder._attn_implementation = "flash_attention_xla"
         else:
             config.decoder._attn_implementation = "sdpa"
             config.vision_encoder._attn_implementation = "sdpa"
@@ -54,7 +56,6 @@ class FoundationModelLoader(ModelLoader):
         model = model.eval()
 
         if settings.COMPILE_ALL or settings.COMPILE_FOUNDATION:
-            torch.set_float32_matmul_precision("high")
             torch._dynamo.config.cache_size_limit = 1000
             torch._dynamo.config.suppress_errors = False
             torch._dynamo.config.specialize_int = False
@@ -65,7 +66,7 @@ class FoundationModelLoader(ModelLoader):
             )
             compile_args = get_compile_args(device)
             model.encoder = torch.compile(model.vision_encoder, **compile_args)
-            model.decoder = torch.compile(model.decoder, **compile_args, dynamic=True)
+            model.decoder = torch.compile(model.decoder, **compile_args)
             model.embedder = torch.compile(model.embedder, **compile_args)
 
         logger.debug(

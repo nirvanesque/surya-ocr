@@ -9,11 +9,22 @@ from transformers.activations import ACT2FN
 from transformers.utils import is_flash_attn_2_available
 
 from surya.common.surya.encoder.config import SuryaEncoderConfig
+from surya.common.xla import get_nearest_pad
 from surya.logging import get_logger
+from surya.settings import settings
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_func
     from flash_attn.layers.rotary import apply_rotary_emb  # noqa
+
+# This is for the custom xla kernel for flash attention
+try:
+    import torch_xla
+    import torch_xla.distributed.spmd
+    import torch_xla.experimental.custom_kernel
+    import torch_xla.experimental.splash_attention
+except ImportError:
+    pass
 
 
 logger = get_logger()
@@ -131,6 +142,176 @@ def apply_rotary_pos_emb_flashatt(
     q_embed = apply_rotary_emb(q.float(), cos.float(), sin.float()).type_as(q)
     k_embed = apply_rotary_emb(k.float(), cos.float(), sin.float()).type_as(k)
     return q_embed, k_embed
+
+
+class Qwen2_5_VLVisionXLAFlashAttention2_1(nn.Module):
+    def __init__(self, dim: int, num_heads: int = 16) -> None:
+        super().__init__()
+        self.num_heads = num_heads
+        self.qkv = nn.Linear(dim, dim * 3, bias=True)
+        self.proj = nn.Linear(dim, dim)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rotary_pos_emb: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        seq_length = hidden_states.shape[0]
+        q, k, v = (
+            self.qkv(hidden_states)
+            .reshape(seq_length, 3, self.num_heads, -1)
+            .permute(1, 0, 2, 3)
+            .unbind(0)
+        )
+        if position_embeddings is None:
+            logger.warning_once(
+                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+                "through `rotary_pos_emb` (2D tensor of RoPE theta values), to using externally computed "
+                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.54 `rotary_pos_emb` will be "
+                "removed and `position_embeddings` will be mandatory."
+            )
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
+        else:
+            cos, sin = position_embeddings
+        q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+        attention_mask = torch.zeros(
+            [1, seq_length, seq_length], device=q.device, dtype=torch.bool
+        )
+        for i in range(1, len(cu_seqlens)):
+            attention_mask[
+                ...,
+                cu_seqlens[i - 1] : cu_seqlens[i],
+                cu_seqlens[i - 1] : cu_seqlens[i],
+            ] = True
+        q = q.transpose(0, 1)
+        k = k.transpose(0, 1)
+        v = v.transpose(0, 1)
+        attn_output = F.scaled_dot_product_attention(
+            q.unsqueeze(0),
+            k.unsqueeze(0),
+            v.unsqueeze(0),
+            attention_mask,
+            dropout_p=0.0,
+        )
+        attn_output = attn_output.squeeze(0).transpose(0, 1)
+        attn_output = attn_output.reshape(seq_length, -1)
+        attn_output = self.proj(attn_output)
+        return attn_output
+
+
+class Qwen2_5_VLVisionXLASplashAttention(nn.Module):
+    def __init__(self, dim: int, num_heads: int = 16) -> None:
+        super().__init__()
+        self.num_heads = num_heads
+        self.qkv = nn.Linear(dim, dim * 3, bias=True)
+        self.proj = nn.Linear(dim, dim)
+        self.head_dim = dim // num_heads
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rotary_pos_emb: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        seq_length = hidden_states.shape[0]
+
+        # Single reshape to target layout - avoid multiple operations
+        qkv = self.qkv(hidden_states).view(seq_length, 3, self.num_heads, self.head_dim)
+
+        # More efficient unbind - no permute needed
+        q, k, v = qkv.unbind(dim=1)  # [seq_len, num_heads, head_dim]
+
+        # Apply rotary embeddings if provided
+        if position_embeddings is not None:
+            cos, sin = position_embeddings
+            q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+        # Single reshape to flash attention format [batch, num_heads, seq_len, head_dim]
+        q = q.unsqueeze(0).transpose(1, 2)  # [1, num_heads, seq_len, head_dim]
+        k = k.unsqueeze(0).transpose(1, 2)
+        v = v.unsqueeze(0).transpose(1, 2)
+
+        total_seqlen = cu_seqlens[-1].item()
+        # from cu_seqlens to segment ids for each position in dim 0
+        segment_ids = torch.zeros((total_seqlen,), dtype=torch.int32, device=q.device)
+        for i in range(1, cu_seqlens.shape[0]):
+            segment_ids[cu_seqlens[i - 1] : cu_seqlens[i]] = i - 1
+        segment_ids = segment_ids.reshape(1, -1)
+
+        mesh = torch_xla.distributed.spmd.Mesh(
+            device_ids=[0], mesh_shape=(1, 1), axis_names=("data", "fsdp")
+        )
+
+        partition_spec = (None, None, None, None)
+        segment_ids_partition_spec = (None, None)
+
+        splash_config = torch_xla.experimental.splash_attention.SplashAttentionConfig(
+            mesh=str(mesh),
+            qkv_partition_spec=partition_spec,
+            segment_ids_partition_spec=segment_ids_partition_spec,
+        )
+
+        attn_output = torch_xla.experimental.splash_attention.splash_attention(
+            q, k, v, splash_config.to_json(), decoder_segment_ids=segment_ids
+        ).reshape(seq_length, -1)
+        attn_output = self.proj(attn_output)
+        return attn_output
+
+
+class Qwen2_5_VLVisionXLAFlashAttention2(nn.Module):
+    def __init__(self, dim: int, num_heads: int = 16) -> None:
+        super().__init__()
+        self.num_heads = num_heads
+        self.qkv = nn.Linear(dim, dim * 3, bias=True)
+        self.proj = nn.Linear(dim, dim)
+        self.head_dim = dim // num_heads
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rotary_pos_emb: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        seq_length = hidden_states.shape[0]
+
+        # Single reshape to target layout - avoid multiple operations
+        qkv = self.qkv(hidden_states).view(seq_length, 3, self.num_heads, self.head_dim)
+
+        # More efficient unbind - no permute needed
+        q, k, v = qkv.unbind(dim=1)  # [seq_len, num_heads, head_dim]
+
+        # Apply rotary embeddings if provided
+        if position_embeddings is not None:
+            cos, sin = position_embeddings
+            q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+        # Single reshape to flash attention format [batch, num_heads, seq_len, head_dim]
+        q = q.unsqueeze(0).transpose(1, 2)  # [1, num_heads, seq_len, head_dim]
+        k = k.unsqueeze(0).transpose(1, 2)
+        v = v.unsqueeze(0).transpose(1, 2)
+
+        total_seqlen = cu_seqlens[-1].item()
+        # from cu_seqlens to segment ids for each position in dim 0
+        segment_ids = torch.zeros((total_seqlen,), dtype=torch.int32, device=q.device)
+        for i in range(1, cu_seqlens.shape[0]):
+            segment_ids[cu_seqlens[i - 1] : cu_seqlens[i]] = i - 1
+        segment_ids = segment_ids.reshape(1, -1)
+
+        print(
+            f"Shapes are {q.shape}, {k.shape}, {v.shape}, segment_ids: {segment_ids.shape}"
+        )
+        attn_output = torch_xla.experimental.custom_kernel.flash_attention(
+            q, k, v, q_segment_ids=segment_ids, kv_segment_ids=segment_ids
+        ).reshape(seq_length, -1)
+        attn_output = self.proj(attn_output)
+        return attn_output
 
 
 class Qwen2_5_VLVisionFlashAttention2(nn.Module):
@@ -295,6 +476,21 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         seq_lengths = cu_seqlens[1:] - cu_seqlens[:-1]  # Keep as tensor
         max_seq_len = seq_lengths.max().item()  # Use .max() on tensor
 
+        if settings.FOUNDATION_STATIC_CACHE:
+            # Pad max_seq_len to the nearest multiple for compilation
+            max_seq_len = get_nearest_pad(max_seq_len, pad_multiple=16)
+
+            # Pad batch_size to the nearest multiple for compilation
+            batch_size = get_nearest_pad(batch_size, pad_multiple=2)
+
+            # Ensure seq_lengths is a tensor of the correct size
+            seq_lengths = F.pad(
+                seq_lengths, (0, batch_size - seq_lengths.size(0)), "constant", 0
+            )
+
+        # some day, you may look at this, and think: "what if I used repeat_interlave or some other fancy torch instead"?
+        # don't do this - it's a path to madness.  For some readon, this loop is optimal on TPU
+
         batch_indices = []
         position_indices = []
 
@@ -341,37 +537,14 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         batched_k[batch_indices, position_indices] = k
         batched_v[batch_indices, position_indices] = v
 
-        return batched_q, batched_k, batched_v, attention_mask
-
-    def repack_hidden_states(self, batched_output, cu_seqlens):
-        """
-        Reverses the unpacking operation using indexing to convert batched outputs
-        back to a flat tensor of shape (total_seq_len, hidden_dim).
-
-        Args:
-            batched_output: Tensor of shape (batch_size, max_seq_len, hidden_dim)
-            cu_seqlens: Tensor of shape (batch_size + 1,) with cumulative sequence lengths
-
-        Returns:
-            packed_output: Tensor of shape (total_seq_len, hidden_dim)
-        """
-        device = batched_output.device
-
-        seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
-
-        batch_indices = []
-        position_indices = []
-
-        for i, seq_len in enumerate(seq_lengths):
-            batch_indices.extend([i] * seq_len)
-            position_indices.extend(list(range(seq_len)))
-
-        batch_indices = torch.tensor(batch_indices, device=device)
-        position_indices = torch.tensor(position_indices, device=device)
-
-        packed_output = batched_output[batch_indices, position_indices]
-
-        return packed_output  # Shape: (total_seq_len, hidden_dim)
+        return (
+            batched_q,
+            batched_k,
+            batched_v,
+            attention_mask,
+            batch_indices,
+            position_indices,
+        )
 
     def forward(
         self,
@@ -401,11 +574,16 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
             cos, sin = position_embeddings
         q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
 
-        q, k, v, attention_mask = self.unpack_qkv_with_mask(q, k, v, cu_seqlens)
+        q, k, v, attention_mask, batch_indices, position_indices = (
+            self.unpack_qkv_with_mask(q, k, v, cu_seqlens)
+        )
         batch_size, max_seqlen = q.shape[:2]
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
+        print(
+            f"Shapes: q: {q.shape}, k: {k.shape}, v: {v.shape}, attention_mask: {attention_mask.shape}"
+        )
         attn_output = F.scaled_dot_product_attention(
             q,
             k,
@@ -416,8 +594,8 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         attn_output = attn_output.permute(0, 2, 1, 3).reshape(
             batch_size, max_seqlen, -1
         )  # Bring back to (batch_size, max_seqlen, hidden_dim)
+        attn_output = attn_output[batch_indices, position_indices]
         attn_output = self.proj(attn_output)
-        attn_output = self.repack_hidden_states(attn_output, cu_seqlens)
 
         return attn_output
 
@@ -425,6 +603,7 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
 QWEN2_5_VL_VISION_ATTENTION_CLASSES = {
     "eager": Qwen2_5_VLVisionAttention,
     "flash_attention_2": Qwen2_5_VLVisionFlashAttention2,
+    "flash_attention_xla": Qwen2_5_VLVisionXLAFlashAttention2,
     "sdpa": Qwen2_5_VLVisionSdpaAttention,
 }
 

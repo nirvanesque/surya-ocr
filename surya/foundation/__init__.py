@@ -69,7 +69,7 @@ class FoundationPredictor(BasePredictor):
     torch_dtype = None  # No default, loader picks the dtype based on device properties - bf16/fp16
     default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 64}
     encoder_chunk_size: int = 4096  # Default chunk size
-    encoder_chunk_sizes = {"cpu": 4096, "mps": 4096, "cuda": 32768, "xla": 4096}
+    encoder_chunk_sizes = {"cpu": 4096, "mps": 4096, "cuda": 32768, "xla": 32768}
     min_prefill_ratio: int = 0.8
     tasks = {
         TaskNames.ocr_with_boxes: {
@@ -461,21 +461,36 @@ class FoundationPredictor(BasePredictor):
             input_ids.unsqueeze(-1).eq(self.special_token_ids).any(-1)
         )  # (B, L) bool
 
-        idx = torch.arange(input_ids.size(1), device=input_ids.device) + 1  # 1…L
+        idx = (
+            torch.arange(input_ids.size(1), device=input_ids.device, dtype=torch.long)
+            + 1
+        )  # 1…L
         special_length = is_special.sum(dim=1)  # (B,) number of special tokens
         last_special_plus1 = (is_special * idx).max(dim=1).values  # (B,) 0 if none
 
-        image_lengths = special_length  # (B,)
-        text_lengths = input_ids.size(1) - last_special_plus1  # (B,)
+        image_lengths = special_length.to(dtype=torch.long)  # (B,)
+        text_lengths = (input_ids.size(1) - last_special_plus1).to(
+            dtype=torch.long
+        )  # (B,)
 
         with settings.INFERENCE_MODE():
             logger.debug(
                 f"Prefill shapes: input_ids={input_ids.shape}, image_tiles={image_tiles.shape},  grid_thw={grid_thw.shape}, attention_mask={attention_mask.shape}, position_ids={position_ids.shape}, cache_idxs_padded={cache_idxs_padded.shape}"
             )
+
+            start = time.time()
+            image_embeddings = self.model.get_image_embeddings(
+                pixel_values=image_tiles,
+                grid_thw=grid_thw,
+                encoder_chunk_size=self.get_encoder_chunk_size(),
+                image_tile_length=image_tile_length,
+                valid_batch_size=valid_batch_size,
+            )
+            print(f"Image embedding took {time.time() - start:.2f} seconds")
+
             outputs = self.model(
                 input_ids=input_ids,
-                image_tiles=image_tiles,
-                grid_thw=grid_thw,
+                image_embeddings=image_embeddings,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 inputs_embeds=None,
@@ -486,7 +501,6 @@ class FoundationPredictor(BasePredictor):
                 prefill=True,
                 num_valid_tokens=None,  # Not required during prefill
                 text_lengths=text_lengths,
-                image_tile_length=image_tile_length,
                 valid_batch_size=torch.tensor(
                     valid_batch_size, device=self.model.device, dtype=torch.long
                 ),
