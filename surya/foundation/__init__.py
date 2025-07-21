@@ -424,8 +424,12 @@ class FoundationPredictor(BasePredictor):
         input_ids = processed_inputs["input_ids"].to(
             device=self.model.device, dtype=torch.long
         )
-        image_tiles = processed_inputs["image_tiles"].to(dtype=self.model.dtype)
-        grid_thw = processed_inputs["grid_thw"].to(dtype=torch.long)
+        image_tiles = processed_inputs["image_tiles"].to(
+            dtype=self.model.dtype, device=self.model.device
+        )
+        grid_thw = processed_inputs["grid_thw"].to(
+            dtype=torch.long, device=self.model.device
+        )
         attention_mask = processed_inputs["attention_mask"].to(
             device=self.model.device, dtype=torch.long
         )
