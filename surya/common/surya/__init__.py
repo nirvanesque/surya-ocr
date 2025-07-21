@@ -271,7 +271,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             embeddings[out_start : (out_start + valid_embed_len)] = chunk_embeddings[
                 :valid_embed_len
             ]
-            out_start += valid_embed_len
+            out_start += valid_embed_len.item()
 
         encoding_2d = self.get_2d_learned_embeddings(
             grid_thw,
