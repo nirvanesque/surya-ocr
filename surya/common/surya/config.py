@@ -64,6 +64,9 @@ class SuryaModelConfig(S3DownloaderMixin, PretrainedConfig):
         self.num_beacon_tokens = num_beacon_tokens
         self.beacon_token_interval = beacon_token_interval
         self.sliding_window = sliding_window
+        if self.sliding_window is None:
+            self.sliding_window = 512  # Default to 512
+
         self.multi_output_distance = multi_output_distance
         self.max_multi_out = max_multi_out
 
