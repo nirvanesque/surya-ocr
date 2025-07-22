@@ -109,6 +109,11 @@ class FoundationPredictor(BasePredictor):
         self.device_beacon_token = torch.tensor(
             self.processor.beacon_token_id, device=self.model.device, dtype=torch.long
         )
+        self.device_thinking_token = torch.tensor(
+            self.processor.ocr_tokenizer.SPECIAL_TOKEN_MAPPING["<think1>"],
+            device=self.model.device,
+            dtype=torch.long,
+        )
         self.special_token_ids = torch.tensor(
             [self.model.config.image_token_id] + self.model.config.register_token_ids,
             device=self.model.device,
@@ -225,6 +230,78 @@ class FoundationPredictor(BasePredictor):
             token_probs=token_probs,
         )
 
+    def maybe_insert_reasoning_tokens(
+        self, input_ids: torch.Tensor, num_predicted_tokens: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        batch_size, seq_len = (
+            input_ids.shape
+        )  # seq_len can be >1 - In case of multi-token predictions
+
+        # num_predicted tokens **does not include** the current new input_ids, this number is updated **after beacon tokens are inserted**
+        token_positions = num_predicted_tokens + torch.arange(
+            1, seq_len + 1, device=input_ids.device
+        ).unsqueeze(0)
+        reasoning_positions = (
+            (torch.rand_like(token_positions.to(torch.float)) < 0.01)
+            & (token_positions == token_positions.max(dim=-1, keepdim=True).values)
+            & (token_positions > 2)
+        )
+
+        # If no beacons needed, return original input
+        needs_reasoning = reasoning_positions.any(dim=1)  # shape: [batch_size]
+        if not needs_reasoning.any():
+            return input_ids, torch.ones(
+                batch_size, dtype=torch.long, device=input_ids.device
+            ) * seq_len
+
+        reasoning_insert_pos = torch.argmax(reasoning_positions.float(), dim=1)
+
+        # Padded input ids.
+        new_input_ids = torch.full(
+            (batch_size, seq_len + 1),
+            self.device_pad_token,
+            dtype=input_ids.dtype,
+            device=input_ids.device,
+        )
+
+        # Create indices for vectorized operations
+        batch_indices = torch.arange(batch_size, device=input_ids.device).unsqueeze(1)
+        seq_indices = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
+
+        # Calculate target positions for each token
+        # For sequences with beacons: tokens at pos >= beacon_insert_pos get shifted by +1
+        # For sequences without beacons: all tokens get shifted by +1 (start at position 1)
+        reasoning_pos_expanded = reasoning_insert_pos.unsqueeze(1)
+        needs_reasoning_expanded = needs_reasoning.unsqueeze(1)
+
+        # Calculate shift amount for each position
+        shift_amount = torch.where(
+            needs_reasoning_expanded,
+            (
+                seq_indices >= reasoning_pos_expanded
+            ).long(),  # Shift by 1 if pos >= beacon_pos
+            torch.ones_like(
+                seq_indices
+            ),  # Shift by 1 for all positions (no beacon case)
+        )
+
+        target_positions = seq_indices + shift_amount
+
+        # Use advanced indexing to place all tokens at once
+        new_input_ids[batch_indices, target_positions] = input_ids
+
+        # Insert beacon tokens at the correct positions
+        new_input_ids[needs_reasoning, reasoning_insert_pos[needs_reasoning]] = (
+            self.device_thinking_token
+        )
+
+        # Calculate valid token counts for both padded and non padded sequences
+        valid_token_counts = torch.where(needs_reasoning, seq_len + 1, seq_len).to(
+            dtype=torch.long, device=input_ids.device
+        )
+
+        return new_input_ids, valid_token_counts
+
     # Make space for beacon tokens to be inserted while keeping the same seq len across all batch elements
     # This involves **left padding** the input sequence. Although this is unconventional, it works better
     # with the causal mask of flash attention, and we are careful to ignore this pad token when inserting
@@ -301,6 +378,7 @@ class FoundationPredictor(BasePredictor):
         self,
         current_inputs: Optional[ContinuousBatchInput] = None,
         max_lookahead_tokens: Optional[int] = None,
+        add_reasoning: bool = False,
     ):
         # Note - If we want to use the outputs from the non-last token, we
         # need to set the cache position manually to ensure causality. The default
@@ -339,6 +417,12 @@ class FoundationPredictor(BasePredictor):
         input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(
             input_ids, num_predicted_tokens
         )
+
+        if add_reasoning:
+            input_ids, num_valid_tokens = self.maybe_insert_reasoning_tokens(
+                input_ids, num_predicted_tokens
+            )
+
         position_ids = position_ids[:, -1:] + torch.arange(
             1, input_ids.shape[1] + 1, device=input_ids.device
         )
@@ -606,6 +690,7 @@ class FoundationPredictor(BasePredictor):
         math_mode: bool = True,
         drop_repeated_tokens: bool = True,
         max_lookahead_tokens: Optional[int] = None,
+        add_reasoning: bool = False,
         top_k: int = 5,
     ) -> tuple:
         allowed_tasks = self.tasks.keys()
@@ -707,7 +792,9 @@ class FoundationPredictor(BasePredictor):
                                 break
             else:
                 updated_inputs, outputs = self.decode(
-                    current_inputs, max_lookahead_tokens=max_lookahead_tokens
+                    current_inputs,
+                    max_lookahead_tokens=max_lookahead_tokens,
+                    add_reasoning=add_reasoning,
                 )
                 mark_step()
 

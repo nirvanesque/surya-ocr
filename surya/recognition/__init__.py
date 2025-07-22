@@ -346,6 +346,7 @@ class RecognitionPredictor(BasePredictor):
         math_mode: bool = True,
         return_words: bool = False,
         drop_repeated_text: bool = False,
+        add_reasoning: bool = False,
     ) -> List[OCRResult]:
         if task_names is None:
             task_names = [TaskNames.ocr_with_boxes] * len(images)
@@ -421,6 +422,7 @@ class RecognitionPredictor(BasePredictor):
                 batch_size=recognition_batch_size,
                 math_mode=math_mode,
                 drop_repeated_tokens=True,
+                add_reasoning=add_reasoning,
             )
         )
 
