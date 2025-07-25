@@ -1,5 +1,5 @@
 import torch
-from transformers import DynamicCache, HQQQuantizedCache
+from transformers import HQQQuantizedCache, DynamicCache
 from typing import List, Tuple
 import torch.nn.functional as F
 
