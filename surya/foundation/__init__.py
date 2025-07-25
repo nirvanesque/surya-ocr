@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import List, Optional, Tuple
 from collections import deque
 
@@ -217,6 +218,7 @@ class FoundationPredictor(BasePredictor):
         num_predicted_tokens: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len = input_ids.shape       # seq_len can be >1 - In case of multi-token predictions
+        return input_ids, torch.ones(batch_size, dtype=torch.long, device=input_ids.device) * seq_len
         
         # num_predicted tokens **does not include** the current new input_ids, this number is updated **after beacon tokens are inserted**
         token_positions = num_predicted_tokens + torch.arange(1, seq_len + 1, device=input_ids.device).unsqueeze(0)
@@ -268,9 +270,12 @@ class FoundationPredictor(BasePredictor):
         batch_size = input_ids.shape[0]
 
         # Pre-shift the attention mask based on the cache update
-        self.kv_cache.maybe_shift_attention_mask(
+        self.kv_cache.decode_attention_mask_update(
             num_valid_tokens=num_valid_tokens, cache_idxs=list(range(batch_size))
         )
+
+        torch.cuda.synchronize()
+        start = time.time()
         with settings.INFERENCE_MODE():
             outputs = self.model(
                 input_ids=input_ids,
@@ -281,6 +286,9 @@ class FoundationPredictor(BasePredictor):
                 prefill=False,
                 num_valid_tokens=num_valid_tokens
             )
+        torch.cuda.synchronize()
+        end = time.time()
+        print(f"Forward took {end - start}")
 
         processed_output: ContinuousBatchOutput = self.process_outputs(outputs, max_lookahead_tokens=max_lookahead_tokens)
         
@@ -517,7 +525,12 @@ class FoundationPredictor(BasePredictor):
             if (
                 self.num_empty_slots / batch_size
             ) > self.min_prefill_ratio and self.prompt_queue:
+                torch.cuda.synchronize()
+                start = time.time()
                 updated_inputs, outputs, merge_idxs = self.prefill(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
+                torch.cuda.synchronize()
+                end = time.time()
+                print(f"Prefill took {end - start}")
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
@@ -552,7 +565,12 @@ class FoundationPredictor(BasePredictor):
                                 pbar.update(1)
                                 break
             else:
+                torch.cuda.synchronize()
+                start = time.time()
                 updated_inputs, outputs = self.decode(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
+                torch.cuda.synchronize()
+                end = time.time()
+                print(f"Decode took {end - start}")
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 token_probs_cpu = outputs.token_probs.cpu()
