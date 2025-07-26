@@ -1,4 +1,3 @@
-import time
 from typing import Any, Dict, List, Optional, Tuple
 import torch
 from transformers import StaticCache
@@ -295,8 +294,6 @@ class ContinuousBatchingCache(StaticCache):
         cache_kwargs: Optional[Dict[str, Any]] = None,
 
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        torch.cuda.synchronize()
-        start = time.time()
         num_valid_tokens: torch.Tensor = cache_kwargs.get("num_valid_tokens")  # shape: (B,)
         assert num_valid_tokens is not None, ("`num_valid_tokens` must be provided in `cache_kwargs`")
         device = key_states.device
@@ -342,9 +339,6 @@ class ContinuousBatchingCache(StaticCache):
         # In-place edit - Mutates
         text_token_counts += num_valid_tokens
         text_token_counts.clamp_(sliding_window)
-        torch.cuda.synchronize()
-        end = time.time()
-        print(f"Decode update took {end - start}")
 
         return key_cache, value_cache
 

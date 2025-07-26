@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import time
 from typing import List, Optional, Tuple
 from collections import deque
 
@@ -274,8 +273,6 @@ class FoundationPredictor(BasePredictor):
             num_valid_tokens=num_valid_tokens, cache_idxs=list(range(batch_size))
         )
 
-        torch.cuda.synchronize()
-        start = time.time()
         with settings.INFERENCE_MODE():
             outputs = self.model(
                 input_ids=input_ids,
@@ -286,9 +283,6 @@ class FoundationPredictor(BasePredictor):
                 prefill=False,
                 num_valid_tokens=num_valid_tokens
             )
-        torch.cuda.synchronize()
-        end = time.time()
-        print(f"Forward took {end - start}")
 
         processed_output: ContinuousBatchOutput = self.process_outputs(outputs, max_lookahead_tokens=max_lookahead_tokens)
         
@@ -525,12 +519,7 @@ class FoundationPredictor(BasePredictor):
             if (
                 self.num_empty_slots / batch_size
             ) > self.min_prefill_ratio and self.prompt_queue:
-                torch.cuda.synchronize()
-                start = time.time()
                 updated_inputs, outputs, merge_idxs = self.prefill(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
-                torch.cuda.synchronize()
-                end = time.time()
-                print(f"Prefill took {end - start}")
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
@@ -565,12 +554,7 @@ class FoundationPredictor(BasePredictor):
                                 pbar.update(1)
                                 break
             else:
-                torch.cuda.synchronize()
-                start = time.time()
                 updated_inputs, outputs = self.decode(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
-                torch.cuda.synchronize()
-                end = time.time()
-                print(f"Decode took {end - start}")
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 token_probs_cpu = outputs.token_probs.cpu()
