@@ -172,27 +172,6 @@ class ContinuousBatchingCache(StaticCache):
     # Matches the logic of the decode update, but needs to be called before the updates
     # since some parts of the model depend on the attention mask
     # """
-    # def decode_attention_mask_update(
-    #     self, num_valid_tokens: List[int], cache_idxs: List[int]
-    # ):
-    #     sliding_window = self.text_sliding_window
-    #     text_cache_start = self.max_cache_len - sliding_window
-
-    #     # Using text_token_counts of first layer, should be same for all though
-    #     current_text_lens = self.text_token_counts[0]
-    #     new_text_lens = current_text_lens + num_valid_tokens
-    #     is_full = new_text_lens > sliding_window
-
-    #     # For caches that become full, attention mask is all 1s
-    #     # For caches that remain empty, we only need to add 1s in the appropriate places
-    #     for batch_idx, cache_idx in enumerate(cache_idxs):
-    #         valid_tokens = num_valid_tokens[batch_idx].item()
-    #         text_len = current_text_lens[batch_idx]
-    #         if is_full[batch_idx]:
-    #             self.attention_mask[cache_idx, text_cache_start:] = 1
-    #         else:
-    #             self.attention_mask[cache_idx, text_len: text_len + valid_tokens] = 1
-
     def decode_attention_mask_update(
         self, num_valid_tokens: torch.Tensor, cache_idxs: List[int]
     ):
@@ -225,7 +204,6 @@ class ContinuousBatchingCache(StaticCache):
             if max_valid_tokens > 0:
                 batch_size = len(non_full_cache_idxs)
                 offset_range = torch.arange(max_valid_tokens, device=current_text_lens.device)
-                
                 batch_offsets = offset_range.unsqueeze(0).expand(batch_size, -1)
                 start_positions = non_full_current_lens.unsqueeze(1)
                 valid_token_counts = non_full_valid_tokens.unsqueeze(1)
@@ -234,7 +212,7 @@ class ContinuousBatchingCache(StaticCache):
                 valid_mask = batch_offsets < valid_token_counts
                 
                 row_indices = non_full_cache_idxs.unsqueeze(1).expand(-1, max_valid_tokens)[valid_mask]
-                col_indices = position_indices[valid_mask]
+                col_indices = text_cache_start + position_indices[valid_mask]
                 
                 self.attention_mask[row_indices, col_indices] = 1
 
@@ -295,7 +273,6 @@ class ContinuousBatchingCache(StaticCache):
             text_token_counts + cache_text_start
         )
         ## TODO Actually do the insertion for differing num_valid_tokens
-        batch_indices = torch.arange(batch_size, device=device).unsqueeze(1).repeat(1, seq_len)
         seq_indices = insert_indices.unsqueeze(1) + torch.arange(seq_len, device=device)
         expanded_seq_indices = seq_indices.unsqueeze(1).unsqueeze(-1).expand(-1, num_head, -1, head_dim)
         key_cache.scatter_(2, expanded_seq_indices, key_states)
