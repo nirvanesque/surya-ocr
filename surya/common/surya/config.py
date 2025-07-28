@@ -66,6 +66,9 @@ class SuryaModelConfig(S3DownloaderMixin, PretrainedConfig):
         self.multi_output_distance = multi_output_distance
         self.max_multi_out = max_multi_out
 
+        if self.sliding_window is None:
+            self.sliding_window = self.max_sequence_length
+
         if isinstance(vision_encoder, dict):
             vision_encoder = SuryaEncoderConfig(**vision_encoder)
         elif vision_encoder is None:

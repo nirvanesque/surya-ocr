@@ -415,7 +415,12 @@ class RecognitionPredictor(BasePredictor):
 
         # Make predictions
         predicted_tokens, batch_bboxes, scores, _ = self.foundation_predictor.prediction_loop(
-            flat["slices"], flat["input_text"], flat["task_names"], batch_size=recognition_batch_size, math_mode=math_mode, drop_repeated_tokens=True
+            images=flat["slices"],
+            input_texts=flat["input_text"],
+            task_names=flat["task_names"],
+            batch_size=recognition_batch_size,
+            math_mode=math_mode,
+            drop_repeated_tokens=True,
         )
 
         # Get text and bboxes in structured form
