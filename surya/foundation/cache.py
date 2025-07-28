@@ -1,6 +1,5 @@
 from typing import Any, Dict, List, Optional, Tuple
 import torch
-from transformers import StaticCache
 from transformers import PretrainedConfig
 
 """
@@ -14,7 +13,7 @@ Heavily inspired from https://github.com/huggingface/transformers/blob/0725cd695
 """
 
 
-class ContinuousBatchingCache(StaticCache):
+class ContinuousBatchingCache():
     def __init__(
         self,
         config: PretrainedConfig,
@@ -24,16 +23,30 @@ class ContinuousBatchingCache(StaticCache):
         device: int,
         dtype: int,
     ):
-        # batch_size is deprecated in newer versions
-        super().__init__(
-            config,
-            max_cache_len=max_cache_len,
-            device=device,
-            dtype=dtype,
-            max_batch_size=batch_size,
-        )
         self.text_sliding_window = text_sliding_window
         self.num_layers = config.num_hidden_layers
+        self.max_batch_size = batch_size
+        self.max_cache_len = max_cache_len
+        self.head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+        self._dtype = dtype
+        self.num_key_value_heads = (
+            config.num_attention_heads
+            if getattr(config, "num_key_value_heads", None) is None
+            else config.num_key_value_heads
+        )
+
+        # Cache init is taken from huggingface StaticCache - https://github.com/huggingface/transformers/blob/67ddc82fbc7e52c6f42a395b4a6d278c55b77a39/src/transformers/cache_utils.py#L1125
+        self.key_cache: list[torch.Tensor] = []
+        self.value_cache: list[torch.Tensor] = []
+        cache_shape = (self.max_batch_size, self.num_key_value_heads, self.max_cache_len, self.head_dim)
+        device = torch.device(device) if device is not None else None
+        for _ in range(config.num_hidden_layers):
+            new_layer_key_cache = torch.zeros(cache_shape, dtype=self._dtype, device=device)
+            new_layer_value_cache = torch.zeros(cache_shape, dtype=self._dtype, device=device)
+            torch._dynamo.mark_static_address(new_layer_key_cache)
+            torch._dynamo.mark_static_address(new_layer_value_cache)
+            self.key_cache.append(new_layer_key_cache)
+            self.value_cache.append(new_layer_value_cache)
 
         self.attention_mask = torch.zeros(
             (self.max_batch_size, self.max_cache_len), device=device, dtype=torch.long
@@ -280,7 +293,7 @@ class ContinuousBatchingCache(StaticCache):
 
         # In-place edit - Mutates
         text_token_counts += num_valid_tokens
-        text_token_counts.clamp_(sliding_window)
+        text_token_counts.clamp_(max=sliding_window)
 
         return key_cache, value_cache
 
