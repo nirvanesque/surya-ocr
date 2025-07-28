@@ -77,8 +77,14 @@ def inference_texify(
 @click.option(
     "--line_mode", is_flag=True, help="Use line mode for texify.", default=False
 )
-def main(ds_name: str, results_dir: str, max_rows: int, line_mode: bool):
-    foundation_predictor = FoundationPredictor()
+@click.option(
+    "--checkpoint", type=str, help="Checkpoint of the foundation model to use.", default=None
+)
+@click.option(
+    "--revision", type=str, help="Revision of the foundation model to use.", default=None
+)
+def main(ds_name: str, results_dir: str, max_rows: int, line_mode: bool, revision: str, checkpoint: str):
+    foundation_predictor = FoundationPredictor(revision=revision, checkpoint=checkpoint)
     predictor = RecognitionPredictor(foundation_predictor)
     ds = datasets.load_dataset(ds_name, split="train")
 

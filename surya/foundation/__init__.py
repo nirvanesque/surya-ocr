@@ -94,8 +94,8 @@ class FoundationPredictor(BasePredictor):
         },
     }
 
-    def __init__(self, checkpoint=None, device=settings.TORCH_DEVICE_MODEL, dtype=None):
-        super().__init__(checkpoint, device, dtype)
+    def __init__(self, checkpoint=None, device=settings.TORCH_DEVICE_MODEL, dtype=None, revision=None):
+        super().__init__(checkpoint, device, dtype, revision)
         self.prompt_queue = deque()
         self.batch_prompt_mapping = None
         self.kv_cache = None

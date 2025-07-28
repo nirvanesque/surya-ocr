@@ -17,11 +17,15 @@ logger = get_logger()
 
 
 class FoundationModelLoader(ModelLoader):
-    def __init__(self, checkpoint: Optional[str] = None):
+    def __init__(self, checkpoint: Optional[str] = None, revision: Optional[str] = None):
         super().__init__(checkpoint)
 
         if self.checkpoint is None:
             self.checkpoint = settings.FOUNDATION_MODEL_CHECKPOINT
+        if revision is None:
+            self.revision = "main"
+        else:
+            self.revision = revision
 
     def model(
         self,
@@ -39,7 +43,7 @@ class FoundationModelLoader(ModelLoader):
                 dtype = settings.MODEL_DTYPE
 
         torch.set_float32_matmul_precision("high")
-        config = SuryaModelConfig.from_pretrained(self.checkpoint)
+        config = SuryaModelConfig.from_pretrained(self.checkpoint, revision=self.revision)
 
         if is_flash_attn_2_available() and is_flash_attn_2_supported(device):
             config.decoder._attn_implementation = "flash_attention_2"
@@ -51,7 +55,7 @@ class FoundationModelLoader(ModelLoader):
             config.vision_encoder._attn_implementation = "sdpa"
 
         model = SuryaModel.from_pretrained(
-            self.checkpoint, torch_dtype=dtype, config=config
+            self.checkpoint, torch_dtype=dtype, config=config, revision=self.revision
         ).to(device)
         model = model.eval()
 

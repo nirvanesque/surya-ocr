@@ -18,13 +18,14 @@ class BasePredictor:
         checkpoint: Optional[str] = None,
         device: torch.device | str | None = settings.TORCH_DEVICE_MODEL,
         dtype: Optional[torch.dtype | str] = None,
+        revision: Optional[str] = None,
     ):
         if dtype is None:
             dtype = self.torch_dtype
 
         self.model = None
         self.processor = None
-        loader = self.model_loader_cls(checkpoint)
+        loader = self.model_loader_cls(checkpoint, revision)
 
         self.model = loader.model(device, dtype)
         self.processor = loader.processor()
