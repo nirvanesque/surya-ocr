@@ -402,7 +402,12 @@ class RecognitionPredictor(BasePredictor):
 
         # No images passed, or no boxes passed, or no text detected in the images
         if len(flat["slices"]) == 0:
-            return []
+            return [
+                OCRResult(
+                    text_lines=[], image_bbox=[0, 0, im.size[0], im.size[1]]
+                )
+                for im in images
+            ]
 
         # Sort by line widths. Negative so that longer images come first, fits in with continuous batching better
         sorted_pairs = sorted(enumerate(flat["slices"]), key=lambda x: -x[1].shape[1])
