@@ -3,126 +3,75 @@ import torch
 from transformers import PretrainedConfig
 
 """
-Special cache class for the surya foundation model that supports - 
+Special cache implementation for the surya foundation model that supports - 
 1) Static shape
 2) A custom sliding window, where image tokens stay in cache, and text tokens are popped
 3) Continuous batching - merging etc
 4) Attention mask management - To match with what's currently in the cache
 
+This carefully manages the prefix image cache, while keeping fast updates to the text cache, supporting sliding
+window in the text cache, and maintaining support for the format expected by FA2
 Heavily inspired from https://github.com/huggingface/transformers/blob/0725cd6953803b8aacfc85288cbfb83dea30c469/src/transformers/cache_utils.py#L1079
 """
 
 
-class ContinuousBatchingCache():
+class DynamicOpsContinuousBatchingLayerCache():
     def __init__(
         self,
         config: PretrainedConfig,
         batch_size: int,
         max_cache_len: int,
         text_sliding_window: int,
-        device: int,
-        dtype: int,
+        device: torch.device,
+        dtype: torch.dtype,
     ):
-        self.text_sliding_window = text_sliding_window
-        self.num_layers = config.num_hidden_layers
-        self.max_batch_size = batch_size
         self.max_cache_len = max_cache_len
-        self.head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
-        self._dtype = dtype
+        self.max_batch_size = batch_size
+        self.head_dim = (
+            getattr(config, "head_dim", None)
+            or config.hidden_size // config.num_attention_heads
+        )
         self.num_key_value_heads = (
             config.num_attention_heads
             if getattr(config, "num_key_value_heads", None) is None
             else config.num_key_value_heads
         )
-
-        # Cache init is taken from huggingface StaticCache - https://github.com/huggingface/transformers/blob/67ddc82fbc7e52c6f42a395b4a6d278c55b77a39/src/transformers/cache_utils.py#L1125
-        self.key_cache: list[torch.Tensor] = []
-        self.value_cache: list[torch.Tensor] = []
-        cache_shape = (self.max_batch_size, self.num_key_value_heads, self.max_cache_len, self.head_dim)
-        device = torch.device(device) if device is not None else None
-        for _ in range(config.num_hidden_layers):
-            new_layer_key_cache = torch.zeros(cache_shape, dtype=self._dtype, device=device)
-            new_layer_value_cache = torch.zeros(cache_shape, dtype=self._dtype, device=device)
-            torch._dynamo.mark_static_address(new_layer_key_cache)
-            torch._dynamo.mark_static_address(new_layer_value_cache)
-            self.key_cache.append(new_layer_key_cache)
-            self.value_cache.append(new_layer_value_cache)
-
-        self.attention_mask = torch.zeros(
-            (self.max_batch_size, self.max_cache_len), device=device, dtype=torch.long
-        )
-        self.text_token_counts = [
-            torch.zeros(self.max_batch_size, dtype=torch.long, device=device)
-            for _ in range(self.num_layers)
-        ]
-
+        self.text_sliding_window = text_sliding_window
         self.dtype = dtype
         self.device = device
+
+        cache_shape = (self.max_batch_size, self.num_key_value_heads, self.max_cache_len, self.head_dim)
+        self.key_cache = torch.zeros(cache_shape, dtype=dtype, device=device)
+        self.value_cache = torch.zeros(cache_shape, dtype=dtype, device=device)
+        self.text_token_counts = torch.zeros(
+            self.max_batch_size, dtype=torch.long, device=device
+        )
+
+
+    # The attention mask managed by our kv cache automatically masks the tokens
+    # in the cache, so we can return full length for HF to use in other places
+    # This is mainly utilized in the cache_positions creation
+    def get_seq_length(self) -> int:
+        return self.max_cache_len
+
 
     def update(
         self,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         prefill = cache_kwargs.get("prefill", False)
         update_fn = self._prefill_update if prefill else self._decode_update
         return update_fn(
-            self.key_cache[layer_idx],
-            self.value_cache[layer_idx],
+            self.key_cache,
+            self.value_cache,
             key_states,
             value_states,
-            self.text_token_counts[layer_idx],
-            cache_kwargs,
+            self.text_token_counts,
+            cache_kwargs
         )
 
-    def update_text_counts(self, cache_idxs: List[int], new_text_lens: List[int]):
-        assert len(cache_idxs) == len(new_text_lens)
-        new_text_len_tensor = torch.tensor(
-            new_text_lens, dtype=torch.long, device=self.device
-        )
-        for layer_idx in range(self.num_layers):
-            self.text_token_counts[layer_idx][cache_idxs] = new_text_len_tensor
-
-
-    # Mirrors the logic from _prefill_update
-    # Logic is better explained in this funcrtion
-    def prefill_attention_mask_update(
-        self,
-        prefill_attention_mask: torch.Tensor,
-        cache_idxs: List[int],
-        text_lengths: List[int],
-    ):
-        seq_len = prefill_attention_mask.shape[1]
-        sliding_window = self.text_sliding_window
-        total_cache_len = self.max_cache_len
-        prefix_cache_space = total_cache_len - sliding_window
-
-        for batch_idx, cache_idx in enumerate(cache_idxs):
-            text_len = text_lengths[batch_idx]
-            prefix_len = seq_len - text_len
-            self.attention_mask[cache_idx] = 0  # Set default
-
-            assert prefix_len > 0, "There are no prefix (image) tokens!"
-            
-            end_pos = prefix_cache_space
-            # Handle prefix part - Which may be left padded
-            if prefix_len <= prefix_cache_space:
-                start_pos = prefix_cache_space - prefix_len
-                self.attention_mask[cache_idx, start_pos: end_pos] = prefill_attention_mask[batch_idx, :prefix_len]
-            else:
-                self.attention_mask[cache_idx, :end_pos] = prefill_attention_mask[batch_idx, prefix_len - prefix_cache_space: prefix_len]
-
-            # Handle text part, keeping sliding window in consideration
-            # All of the left padding is before the prefix, so we can ignore the prefill_attention_mask here
-            if text_len > 0:
-                text_cache_start = prefix_cache_space
-                if text_len <= sliding_window:
-                    self.attention_mask[cache_idx, text_cache_start: text_cache_start + text_len] = 1
-                else:
-                    self.attention_mask[cache_idx, -sliding_window: ] = 1
-                
     # Slow impl for now - Prefill time is dominated by the large sequence length forward pass
     def _prefill_update(
         self,
@@ -180,54 +129,6 @@ class ContinuousBatchingCache():
 
         # Return the full key/value states (not just cached) for use in subsequent layers
         return key_states, value_states
-
-    # """
-    # Matches the logic of the decode update, but needs to be called before the updates
-    # since some parts of the model depend on the attention mask
-    # """
-    def decode_attention_mask_update(
-        self, num_valid_tokens: torch.Tensor, cache_idxs: List[int]
-    ):
-        sliding_window = self.text_sliding_window
-        text_cache_start = self.max_cache_len - sliding_window
-
-        # Using text_token_counts of first layer, should be same for all though
-        current_text_lens = self.text_token_counts[0]
-        cache_idxs_tensor = torch.tensor(cache_idxs, device=current_text_lens.device)
-        
-        # Get current text lengths for the relevant cache indices
-        current_lens = current_text_lens[cache_idxs_tensor]
-        new_text_lens = current_lens + num_valid_tokens
-        is_full = new_text_lens > sliding_window
-
-        # Handle full caches - set entire sliding window to 1
-        if is_full.any():
-            full_mask = is_full
-            full_cache_idxs = cache_idxs_tensor[full_mask]
-            self.attention_mask[full_cache_idxs, text_cache_start:] = 1
-
-        # Handle non-full caches - set specific ranges to 1
-        if (~is_full).any():
-            non_full_mask = ~is_full
-            non_full_cache_idxs = cache_idxs_tensor[non_full_mask]
-            non_full_current_lens = current_lens[non_full_mask]
-            non_full_valid_tokens = num_valid_tokens[non_full_mask]
-            
-            max_valid_tokens = non_full_valid_tokens.max().item() if len(non_full_valid_tokens) > 0 else 0
-            if max_valid_tokens > 0:
-                batch_size = len(non_full_cache_idxs)
-                offset_range = torch.arange(max_valid_tokens, device=current_text_lens.device)
-                batch_offsets = offset_range.unsqueeze(0).expand(batch_size, -1)
-                start_positions = non_full_current_lens.unsqueeze(1)
-                valid_token_counts = non_full_valid_tokens.unsqueeze(1)
-                
-                position_indices = start_positions + batch_offsets
-                valid_mask = batch_offsets < valid_token_counts
-                
-                row_indices = non_full_cache_idxs.unsqueeze(1).expand(-1, max_valid_tokens)[valid_mask]
-                col_indices = text_cache_start + position_indices[valid_mask]
-                
-                self.attention_mask[row_indices, col_indices] = 1
 
     """
     Static cache update
@@ -305,6 +206,125 @@ class ContinuousBatchingCache():
         text_token_counts.clamp_(max=sliding_window)
 
         return key_cache, value_cache
+
+
+class DynamicOpsContinuousBatchingCache:
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        batch_size: int,
+        max_cache_len: int,
+        text_sliding_window: int,
+        device: int,
+        dtype: int,
+    ):
+        self.text_sliding_window = text_sliding_window
+        self.num_layers = config.num_hidden_layers
+        self.max_cache_len = max_cache_len
+        self.max_batch_size = batch_size
+
+        self.attention_mask = torch.zeros(
+            (self.max_batch_size, self.max_cache_len), device=device, dtype=torch.long
+        )
+        self.layer_caches = [
+            DynamicOpsContinuousBatchingLayerCache(
+                config,
+                batch_size=batch_size,
+                max_cache_len=max_cache_len,
+                text_sliding_window=text_sliding_window,
+                device=device,
+                dtype=dtype,
+            )
+            for _ in range(self.num_layers)
+        ]
+
+        self.dtype = dtype
+        self.device = device
+
+    # """
+    # Matches the logic of the layer decode update, but needs to be called before the updates
+    # since some parts of the model depend on the attention mask
+    # """
+    def decode_attention_mask_update(
+        self, num_valid_tokens: torch.Tensor, cache_idxs: List[int]
+    ):
+        sliding_window = self.text_sliding_window
+        text_cache_start = self.max_cache_len - sliding_window
+
+        # Using text_token_counts of first layer, should be same for all though
+        current_text_lens = self.layer_caches[0].text_token_counts
+        cache_idxs_tensor = torch.tensor(cache_idxs, device=current_text_lens.device)
+        
+        # Get current text lengths for the relevant cache indices
+        current_lens = current_text_lens[cache_idxs_tensor]
+        new_text_lens = current_lens + num_valid_tokens
+        is_full = new_text_lens > sliding_window
+
+        # Handle full caches - set entire sliding window to 1
+        if is_full.any():
+            full_mask = is_full
+            full_cache_idxs = cache_idxs_tensor[full_mask]
+            self.attention_mask[full_cache_idxs, text_cache_start:] = 1
+
+        # Handle non-full caches - set specific ranges to 1
+        if (~is_full).any():
+            non_full_mask = ~is_full
+            non_full_cache_idxs = cache_idxs_tensor[non_full_mask]
+            non_full_current_lens = current_lens[non_full_mask]
+            non_full_valid_tokens = num_valid_tokens[non_full_mask]
+            
+            max_valid_tokens = non_full_valid_tokens.max().item() if len(non_full_valid_tokens) > 0 else 0
+            if max_valid_tokens > 0:
+                batch_size = len(non_full_cache_idxs)
+                offset_range = torch.arange(max_valid_tokens, device=current_text_lens.device)
+                batch_offsets = offset_range.unsqueeze(0).expand(batch_size, -1)
+                start_positions = non_full_current_lens.unsqueeze(1)
+                valid_token_counts = non_full_valid_tokens.unsqueeze(1)
+                
+                position_indices = start_positions + batch_offsets
+                valid_mask = batch_offsets < valid_token_counts
+                
+                row_indices = non_full_cache_idxs.unsqueeze(1).expand(-1, max_valid_tokens)[valid_mask]
+                col_indices = text_cache_start + position_indices[valid_mask]
+                
+                self.attention_mask[row_indices, col_indices] = 1
+    
+
+    # Mirrors the logic from _prefill_update - Check that function for clearer explanation
+    def prefill_attention_mask_update(
+        self,
+        prefill_attention_mask: torch.Tensor,
+        cache_idxs: List[int],
+        text_lengths: List[int],
+    ):
+        seq_len = prefill_attention_mask.shape[1]
+        sliding_window = self.text_sliding_window
+        total_cache_len = self.max_cache_len
+        prefix_cache_space = total_cache_len - sliding_window
+
+        for batch_idx, cache_idx in enumerate(cache_idxs):
+            text_len = text_lengths[batch_idx]
+            prefix_len = seq_len - text_len
+            self.attention_mask[cache_idx] = 0  # Set default
+
+            assert prefix_len > 0, "There are no prefix (image) tokens!"
+            
+            end_pos = prefix_cache_space
+            # Handle prefix part - Which may be left padded
+            if prefix_len <= prefix_cache_space:
+                start_pos = prefix_cache_space - prefix_len
+                self.attention_mask[cache_idx, start_pos: end_pos] = prefill_attention_mask[batch_idx, :prefix_len]
+            else:
+                self.attention_mask[cache_idx, :end_pos] = prefill_attention_mask[batch_idx, prefix_len - prefix_cache_space: prefix_len]
+
+            # Handle text part, keeping sliding window in consideration
+            # All of the left padding is before the prefix, so we can ignore the prefill_attention_mask here
+            if text_len > 0:
+                text_cache_start = prefix_cache_space
+                if text_len <= sliding_window:
+                    self.attention_mask[cache_idx, text_cache_start: text_cache_start + text_len] = 1
+                else:
+                    self.attention_mask[cache_idx, -sliding_window: ] = 1
 
     # The attention mask managed by our kv cache automatically masks the tokens
     # in the cache, so we can return full length for HF to use in other places
