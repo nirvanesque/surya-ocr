@@ -58,10 +58,8 @@ class LayoutPredictor(BasePredictor):
         )
         layout_results = []
         for image, image_tokens, image_polygons, image_scores, image_topk_scores in zip(images, predicted_tokens, predicted_polygons, scores, topk_scores):
-            print(image_topk_scores)
             layout_boxes = []
             for z, (tok, poly, score, tok_topk) in enumerate(zip(image_tokens, image_polygons, image_scores, image_topk_scores)):
-                print(f"HERE")
                 if tok == self.processor.eos_token_id:
                     break
 
