@@ -421,7 +421,6 @@ class RecognitionPredictor(BasePredictor):
             batch_size=recognition_batch_size,
             math_mode=math_mode,
             drop_repeated_tokens=True,
-            max_lookahead_tokens=0
         )
 
         # Get text and bboxes in structured form
