@@ -217,7 +217,6 @@ class FoundationPredictor(BasePredictor):
         num_predicted_tokens: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len = input_ids.shape       # seq_len can be >1 - In case of multi-token predictions
-        return input_ids, torch.ones(batch_size, dtype=torch.long, device=input_ids.device) * seq_len
         
         # num_predicted tokens **does not include** the current new input_ids, this number is updated **after beacon tokens are inserted**
         token_positions = num_predicted_tokens + torch.arange(1, seq_len + 1, device=input_ids.device).unsqueeze(0)

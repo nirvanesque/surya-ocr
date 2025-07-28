@@ -239,7 +239,6 @@ class ContinuousBatchingCache():
     Expects `num_valid_tokens` in cache_kwargs: a tensor of shape (B,) indicating the number
     of actual (non-padded) tokens to add per batch element.
     """
-    #TODO: Ensure the in-place edit for text_token_counts actually works
     def _decode_update(
         self,
         key_cache: torch.Tensor,
@@ -279,17 +278,27 @@ class ContinuousBatchingCache():
             key_cache[:, :, -sliding_window:] = k_slice_rolled
             value_cache[:, :, -sliding_window:] = v_slice_rolled
 
-        # Insert new tokens
-        insert_indices = torch.where(
+        # Insert only **valid tokens** into the cache. These are **right aligned** within the input sequence
+        seq_indices = torch.arange(seq_len, device=device)[None, :]
+        start_indices = seq_len - num_valid_tokens[:, None]
+        source_mask = seq_indices >= start_indices
+        source_mask_expanded = source_mask[:, None, :, None].expand(batch_size, num_head, seq_len, head_dim)
+        
+        insert_positions = torch.where(
             needs_rotate,
             max_cache_len - num_valid_tokens,
             text_token_counts + cache_text_start
         )
-        ## TODO Actually do the insertion for differing num_valid_tokens
-        seq_indices = insert_indices.unsqueeze(1) + torch.arange(seq_len, device=device)
-        expanded_seq_indices = seq_indices.unsqueeze(1).unsqueeze(-1).expand(-1, num_head, -1, head_dim)
-        key_cache.scatter_(2, expanded_seq_indices, key_states)
-        value_cache.scatter_(2, expanded_seq_indices, value_states)
+        # Step 2: Create target mask in cache coordinates
+        cache_indices = torch.arange(max_cache_len, device=device)[None, :]
+        insert_start = insert_positions[:, None]
+        insert_end = insert_start + num_valid_tokens[:, None]
+        cache_target_mask = ((cache_indices >= insert_start) & 
+                            (cache_indices < insert_end))
+        cache_target_mask_expanded = cache_target_mask[:, None, :, None].expand(batch_size, num_head, max_cache_len, head_dim)
+        
+        key_cache[cache_target_mask_expanded] = key_states[source_mask_expanded]
+        value_cache[cache_target_mask_expanded] = value_states[source_mask_expanded]
 
         # In-place edit - Mutates
         text_token_counts += num_valid_tokens
