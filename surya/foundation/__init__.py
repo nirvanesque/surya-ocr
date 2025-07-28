@@ -542,7 +542,7 @@ class FoundationPredictor(BasePredictor):
 
                             if top_k > 0:
                                 top_k_scores = {
-                                    batch_top_k_indices[k].item(): batch_top_k_probs[k].item()
+                                    batch_top_k_indices_cpu[temp_idx, t_idx, k].item(): batch_top_k_probs_cpu[temp_idx, t_idx, k].item()
                                     for k in range(top_k)
                                 }
                                 topk_probs[p_idx].append(top_k_scores)
@@ -579,7 +579,7 @@ class FoundationPredictor(BasePredictor):
 
                             if top_k > 0:
                                 top_k_scores = {
-                                    batch_top_k_indices[k].item(): batch_top_k_probs[k].item()
+                                    batch_top_k_indices_cpu[temp_idx, t_idx, k].item(): batch_top_k_probs_cpu[temp_idx, t_idx, k].item()
                                     for k in range(top_k)
                                 }
                                 topk_probs[p_idx].append(top_k_scores)
@@ -612,4 +612,5 @@ class FoundationPredictor(BasePredictor):
         self.kv_cache = None
         torch.cuda.empty_cache()
 
+        print(predicted_tokens)
         return predicted_tokens, batch_bboxes, scores, topk_probs
