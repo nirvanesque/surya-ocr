@@ -28,8 +28,7 @@ def table_recognition_cli(input_path: str, skip_table_detection: bool, **kwargs)
     loader = CLILoader(input_path, kwargs, highres=True)
 
     table_rec_predictor = TableRecPredictor()
-    foundation_predictor = FoundationPredictor()
-    layout_predictor = LayoutPredictor(foundation_predictor)
+    layout_predictor = LayoutPredictor()
 
     pnums = []
     prev_name = None

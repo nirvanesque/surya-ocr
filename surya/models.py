@@ -19,7 +19,7 @@ def load_predictors(
 ) -> Dict[str, BasePredictor]:
     foundation_predictor = FoundationPredictor(device=device, dtype=dtype)
     return {
-        "layout": LayoutPredictor(foundation_predictor),
+        "layout": LayoutPredictor(device=device, dtype=dtype),
         "ocr_error": OCRErrorPredictor(device=device, dtype=dtype),
         "recognition": RecognitionPredictor(foundation_predictor),
         "detection": DetectionPredictor(device=device, dtype=dtype),
