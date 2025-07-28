@@ -612,5 +612,4 @@ class FoundationPredictor(BasePredictor):
         self.kv_cache = None
         torch.cuda.empty_cache()
 
-        print(predicted_tokens)
         return predicted_tokens, batch_bboxes, scores, topk_probs
