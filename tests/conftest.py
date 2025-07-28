@@ -26,8 +26,8 @@ def ocr_error_predictor() -> OCRErrorPredictor:
 
 
 @pytest.fixture(scope="session")
-def layout_predictor(foundation_predictor) -> LayoutPredictor:
-    layout_predictor = LayoutPredictor(foundation_predictor)
+def layout_predictor() -> LayoutPredictor:
+    layout_predictor = LayoutPredictor()
     yield layout_predictor
     del layout_predictor
 

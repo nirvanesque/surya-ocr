@@ -25,11 +25,11 @@ class ContinuousBatchingCache(StaticCache):
         dtype: int
     ):
         # batch_size is deprecated in newer versions
-        super().__init__(config, batch_size=None, max_cache_len=max_cache_len, device=device, dtype=dtype, max_batch_size=batch_size)
+        super().__init__(config, max_cache_len=max_cache_len, device=device, dtype=dtype, max_batch_size=batch_size)
         self.text_sliding_window = text_sliding_window
         self.num_layers = config.num_hidden_layers
 
-        self.register_buffer(f"attention_mask", torch.zeros((self.max_batch_size, self.max_cache_len), device=device, dtype=torch.long))
+        self.attention_mask = torch.zeros((self.max_batch_size, self.max_cache_len), device=device, dtype=torch.long)
         self.text_token_counts = [torch.zeros(self.max_batch_size, dtype=torch.long, device=device) for _ in range(self.num_layers)]
 
         self.dtype = dtype

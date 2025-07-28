@@ -98,7 +98,17 @@ class Settings(BaseSettings):
     RECOGNITION_PAD_VALUE: int = 255  # Should be 0 or 255
 
     # Layout
+    LAYOUT_MODEL_CHECKPOINT: str = "s3://layout/2025_02_18"
+    LAYOUT_IMAGE_SIZE: Dict = {"height": 768, "width": 768}
+    LAYOUT_SLICE_MIN: Dict = {
+        "height": 1500,
+        "width": 1500,
+    }  # When to start slicing images
+    LAYOUT_SLICE_SIZE: Dict = {"height": 1200, "width": 1200}  # Size of slices
     LAYOUT_BATCH_SIZE: Optional[int] = None
+    LAYOUT_BENCH_DATASET_NAME: str = "vikp/publaynet_bench"
+    LAYOUT_MAX_BOXES: int = 100
+    COMPILE_LAYOUT: bool = False
     LAYOUT_BENCH_DATASET_NAME: str = "vikp/publaynet_bench"
     ORDER_BENCH_DATASET_NAME: str = "vikp/order_bench"
 
@@ -130,6 +140,14 @@ class Settings(BaseSettings):
             or self.COMPILE_DETECTOR
             or self.TORCH_DEVICE_MODEL == "xla"
         )  # We need to static cache and pad to batch size for XLA, since it will recompile otherwise
+
+    @computed_field
+    def LAYOUT_STATIC_CACHE(self) -> bool:
+        return (
+            self.COMPILE_ALL
+            or self.COMPILE_LAYOUT
+            or self.TORCH_DEVICE_MODEL == "xla"
+        )
 
     @computed_field
     def FOUNDATION_STATIC_CACHE(self) -> bool:
