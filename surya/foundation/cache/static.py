@@ -210,8 +210,6 @@ class StaticOpsContinuousBatchingCache:
         attention_mask: torch.Tensor,
         cache_idxs: torch.Tensor,
         text_lengths: List[int],
-        image_lengths: List[int],
-        cache_idxs_length: Optional[int] = None,
     ):
         # Set from -(image_length + text_length) to end to 1 for each batch element
         seq_len = attention_mask.shape[1]

@@ -22,10 +22,8 @@ from surya.foundation.util import (
 )
 from surya.common.surya.schema import TaskNames
 
-from surya.foundation.cache.dynamic import (  # noqa: F401
-    ContinuousBatchingCache,
-)  # noqa: F401
 from surya.foundation.cache.static import StaticOpsContinuousBatchingCache
+from surya.foundation.cache.dynamic import DynamicOpsContinuousBatchingCache
 from surya.settings import settings
 from surya.logging import get_logger, configure_logging
 
@@ -137,7 +135,8 @@ class FoundationPredictor(BasePredictor):
             * self.model.config.sliding_window
         )
         max_cache_len = max_image_tokens + max_text_tokens
-        self.kv_cache = StaticOpsContinuousBatchingCache(
+        kv_cache_cls = StaticOpsContinuousBatchingCache if settings.TORCH_DEVICE_MODEL == "xla" else DynamicOpsContinuousBatchingCache
+        self.kv_cache = kv_cache_cls(
             self.model.config,
             batch_size,
             max_cache_len,
@@ -315,6 +314,7 @@ class FoundationPredictor(BasePredictor):
         self.kv_cache.decode_attention_mask_update(
             num_valid_tokens=num_valid_tokens, cache_idxs=list(range(batch_size))
         )
+
         with settings.INFERENCE_MODE():
             outputs = self.model(
                 input_ids=input_ids,
@@ -539,8 +539,6 @@ class FoundationPredictor(BasePredictor):
             attention_mask,
             cache_idxs_padded,  # unpadded
             text_lengths,
-            image_lengths,  # These can be unpadded, since we use cache_idxs later
-            torch.tensor([valid_batch_size]).to(self.model.device),
         )
 
         if current_inputs is None:
@@ -610,7 +608,7 @@ class FoundationPredictor(BasePredictor):
         math_mode: bool = True,
         drop_repeated_tokens: bool = True,
         max_lookahead_tokens: Optional[int] = None,
-        top_k: int = 5,
+        top_k: Optional[int] = None
     ) -> tuple:
         allowed_tasks = self.tasks.keys()
         assert all([task_name in allowed_tasks for task_name in task_names]), (
@@ -675,8 +673,11 @@ class FoundationPredictor(BasePredictor):
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
-                token_probs_cpu = outputs.token_probs.cpu()
                 bbox_preds_cpu = outputs.bbox_preds.cpu()
+                if top_k is not None:
+                    batch_top_k_probs, batch_top_k_indices = torch.topk(outputs.token_probs, k=top_k, dim=-1)
+                    batch_top_k_probs_cpu = batch_top_k_probs.cpu()
+                    batch_top_k_indices_cpu = batch_top_k_indices.cpu()
 
                 for temp_idx, b_idx in enumerate(merge_idxs):
                     if self.batch_prompt_mapping[b_idx] is not None:
@@ -686,21 +687,18 @@ class FoundationPredictor(BasePredictor):
                             token = predicted_tokens_cpu[temp_idx, t_idx].item()
                             predicted_tokens[p_idx].append(token)
 
-                            # Keep on GPU for later postprocessing
                             batch_bboxes[p_idx, batch_pos[p_idx]] = bbox_preds_cpu[
                                 temp_idx, t_idx
                             ]
                             batch_pos[p_idx] += 1
                             scores[p_idx].append(scores_cpu[temp_idx, t_idx].item())
 
-                            top_k_probs, top_k_indices = torch.topk(
-                                token_probs_cpu[temp_idx, t_idx], k=top_k, dim=-1
-                            )
-                            top_k_scores = {
-                                top_k_indices[k].item(): top_k_probs[k].item()
-                                for k in range(top_k)
-                            }
-                            topk_probs[p_idx].append(top_k_scores)
+                            if top_k is not None:
+                                top_k_scores = {
+                                    batch_top_k_indices_cpu[temp_idx, t_idx, k].item(): batch_top_k_probs_cpu[temp_idx, t_idx, k].item()
+                                    for k in range(top_k)
+                                }
+                                topk_probs[p_idx].append(top_k_scores)
 
                             if token in [
                                 self.processor.eos_token_id,
@@ -717,8 +715,11 @@ class FoundationPredictor(BasePredictor):
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
-                token_probs_cpu = outputs.token_probs.cpu()
                 bbox_preds_cpu = outputs.bbox_preds.cpu()
+                if top_k is not None:
+                    batch_top_k_probs, batch_top_k_indices = torch.topk(outputs.token_probs, k=top_k, dim=-1)
+                    batch_top_k_probs_cpu = batch_top_k_probs.cpu()
+                    batch_top_k_indices_cpu = batch_top_k_indices.cpu()
 
                 for b_idx, p_idx in self.batch_prompt_mapping.items():
                     if p_idx is not None:
@@ -729,21 +730,18 @@ class FoundationPredictor(BasePredictor):
                             token = predicted_tokens_cpu[b_idx, t_idx].item()
                             predicted_tokens[p_idx].append(token)
 
-                            # Keep on GPU for later postprocessing
                             batch_bboxes[p_idx, batch_pos[p_idx]] = bbox_preds_cpu[
                                 b_idx, t_idx
                             ]
                             batch_pos[p_idx] += 1
                             scores[p_idx].append(scores_cpu[b_idx, t_idx].item())
 
-                            top_k_probs, top_k_indices = torch.topk(
-                                token_probs_cpu[temp_idx, t_idx], k=top_k, dim=-1
-                            )
-                            top_k_scores = {
-                                top_k_indices[k].item(): top_k_probs[k].item()
-                                for k in range(top_k)
-                            }
-                            topk_probs[p_idx].append(top_k_scores)
+                            if top_k is not None:
+                                top_k_scores = {
+                                    batch_top_k_indices_cpu[temp_idx, t_idx, k].item(): batch_top_k_probs_cpu[temp_idx, t_idx, k].item()
+                                    for k in range(top_k)
+                                }
+                                topk_probs[p_idx].append(top_k_scores)
 
                             repeats = len(predicted_tokens[p_idx]) >= batch_max_tokens[
                                 p_idx

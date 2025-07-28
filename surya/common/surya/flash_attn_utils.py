@@ -150,6 +150,7 @@ def flash_attn_prefill(
     return pad_input(flash_attn_out, indices_q, batch_size, query_length), None
 
 # NOTE: Does not support dropout, accepts argument as kwargs to maintain compatibility
+# This function is an order of magnitude faster than the prefill variant, or using the HF interface
 def flash_attn_decode(
     module: torch.nn.Module,
     query_states: torch.Tensor,
@@ -166,18 +167,30 @@ def flash_attn_decode(
     key_states and value_states must have shape (batch_size, num_kv_heads, kv_len, head_dim)
 
     This is the opposite of what is required by flash attention, but keeps parity with the HF convention
+
+    This function computes the left pad and cache seqlens to pass into FA2. For example - 
+    Given an attention_mask shaped (batch_size=2, seq_len=8), where 0 = padding, 1 = real token
+    attention_mask =
+    tensor([
+        [0, 0, 1, 1, 1, 0, 0, 0],  # ← batch 0
+        [0, 1, 1, 1, 1, 1, 1, 0],  # ← batch 1
+    ])
+    cache_leftpad = tensor([2, 1], dtype=torch.int32)
+    cache_seqlens = tensor([5, 7], dtype=torch.int32)
+    These values allow FlashAttention to use a static cache layout with efficient slicing during decoding.
     """
     query_states, key_states, value_states = query_states.transpose(1,2), key_states.transpose(1,2), value_states.transpose(1,2)
-    # Note  - This get the left padding count only, while ignoring right padding counts, which is what FA2 wants
-    cache_leftpad = (attention_mask == 0).cumprod(dim=1).sum(dim=1)
-    cache_leftpad = cache_leftpad.to(torch.int32)
-    
+
+    cache_leftpad = (attention_mask == 0).cumprod(dim=1).sum(dim=1).to(torch.int32)
+    cache_seqlens = (attention_mask * torch.arange(attention_mask.size(1), device=attention_mask.device)).argmax(dim=1).to(torch.int32) + 1
+
     # Returning None for attn_weights to match other attention interfaces
     return _flash_attn_with_kvcache(
         q=query_states,
         k_cache=key_states,
         v_cache=value_states,
         cache_leftpad=cache_leftpad,
+        cache_seqlens=cache_seqlens,
         causal=module.is_causal,
         softmax_scale=scaling,
     ), None

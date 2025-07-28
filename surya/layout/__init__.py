@@ -30,21 +30,19 @@ class LayoutPredictor(BasePredictor):
         images = convert_if_not_rgb(images)
         images = [self.processor.image_processor(image) for image in images]
 
-        predicted_tokens, batch_bboxes, scores, topk_scores = (
-            self.foundation_predictor.prediction_loop(
-                images=images,
-                input_texts=["" for _ in range(len(images))],
-                task_names=[TaskNames.layout for _ in range(len(images))],
-                batch_size=batch_size,
-                max_lookahead_tokens=0,  # Do not do MTP for layout
-            )
+        predicted_tokens, batch_bboxes, scores, topk_scores = self.foundation_predictor.prediction_loop(
+            images=images,
+            input_texts=["" for _ in range(len(images))],
+            task_names=[TaskNames.layout for _ in range(len(images))],
+            batch_size=batch_size,
+            max_lookahead_tokens=0,      # Do not do MTP for layout
+            top_k=5
         )
 
         image_sizes = [img.shape for img in images]
         predicted_polygons = prediction_to_polygon_batch(
             batch_bboxes, image_sizes, self.bbox_size, self.bbox_size // 2
         )
-
         layout_results = []
         for image, image_tokens, image_polygons, image_scores, image_topk_scores in zip(
             images, predicted_tokens, predicted_polygons, scores, topk_scores
