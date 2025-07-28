@@ -471,7 +471,7 @@ class FoundationPredictor(BasePredictor):
         math_mode: bool = True,
         drop_repeated_tokens: bool = True,
         max_lookahead_tokens: Optional[int] = None,
-        top_k: int = 5
+        top_k: int = 0
     ) -> tuple:
         allowed_tasks = self.tasks.keys()
         assert all([task_name in allowed_tasks for task_name in task_names]), (
@@ -523,7 +523,11 @@ class FoundationPredictor(BasePredictor):
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
-                token_probs_cpu = outputs.token_probs.cpu()
+                if top_k > 0:
+                    batch_top_k_probs, batch_top_k_indices = torch.topk(outputs.token_probs, k=top_k, dim=-1)
+                    batch_top_k_probs_cpu = batch_top_k_probs.cpu()
+                    batch_top_k_indices_cpu = batch_top_k_indices.cpu()
+
                 for temp_idx, b_idx in enumerate(merge_idxs):
                     if self.batch_prompt_mapping[b_idx] is not None:
                         p_idx = self.batch_prompt_mapping[b_idx]
@@ -537,14 +541,12 @@ class FoundationPredictor(BasePredictor):
                             batch_pos[p_idx] += 1
                             scores[p_idx].append(scores_cpu[temp_idx, t_idx].item())
 
-                            top_k_probs, top_k_indices = torch.topk(
-                                token_probs_cpu[temp_idx, t_idx], k=top_k, dim=-1
-                            )
-                            top_k_scores = {
-                                top_k_indices[k].item(): top_k_probs[k].item()
-                                for k in range(top_k)
-                            }
-                            topk_probs[p_idx].append(top_k_scores)
+                            if top_k > 0:
+                                top_k_scores = {
+                                    batch_top_k_indices[k].item(): batch_top_k_probs[k].item()
+                                    for k in range(top_k)
+                                }
+                                topk_probs[p_idx].append(top_k_scores)
 
                             if token in [
                                 self.processor.eos_token_id,
@@ -557,7 +559,10 @@ class FoundationPredictor(BasePredictor):
                 updated_inputs, outputs = self.decode(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
-                token_probs_cpu = outputs.token_probs.cpu()
+                if top_k > 0:
+                    batch_top_k_probs, batch_top_k_indices = torch.topk(outputs.token_probs, k=top_k, dim=-1)
+                    batch_top_k_probs_cpu = batch_top_k_probs.cpu()
+                    batch_top_k_indices_cpu = batch_top_k_indices.cpu()
 
                 for b_idx, p_idx in self.batch_prompt_mapping.items():
                     if p_idx is not None:
@@ -573,14 +578,12 @@ class FoundationPredictor(BasePredictor):
                             batch_pos[p_idx] += 1
                             scores[p_idx].append(scores_cpu[b_idx, t_idx].item())
 
-                            top_k_probs, top_k_indices = torch.topk(
-                                token_probs_cpu[temp_idx, t_idx], k=top_k, dim=-1
-                            )
-                            top_k_scores = {
-                                top_k_indices[k].item(): top_k_probs[k].item()
-                                for k in range(top_k)
-                            }
-                            topk_probs[p_idx].append(top_k_scores)
+                            if top_k > 0:
+                                top_k_scores = {
+                                    batch_top_k_indices[k].item(): batch_top_k_probs[k].item()
+                                    for k in range(top_k)
+                                }
+                                topk_probs[p_idx].append(top_k_scores)
 
                             repeats = (
                                 len(predicted_tokens[p_idx]) >= batch_max_tokens[p_idx]
