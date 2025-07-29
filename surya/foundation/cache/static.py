@@ -1,6 +1,5 @@
 from typing import Any, Dict, List, Optional, Tuple
 import torch
-from transformers import StaticCache
 from transformers import PretrainedConfig
 
 """
@@ -14,7 +13,7 @@ Heavily inspired from https://github.com/huggingface/transformers/blob/0725cd695
 """
 
 
-class StaticOpsContinuousBatchingLayerCache(StaticCache):
+class StaticOpsContinuousBatchingLayerCache:
     def __init__(
         self,
         config: PretrainedConfig,
