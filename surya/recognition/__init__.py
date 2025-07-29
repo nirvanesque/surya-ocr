@@ -488,8 +488,6 @@ class RecognitionPredictor(BasePredictor):
                         text_line, self.processor.ocr_tokenizer.special_tokens
                     )
                     text = "".join([char.text for char in text_line])
-                    print(repr(text))
-                    print('-' * 100)
                     text = unwrap_math(text)
                     text = clean_math_tags(text)
                     lines.append(
