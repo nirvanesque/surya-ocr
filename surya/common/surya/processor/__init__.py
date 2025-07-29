@@ -198,7 +198,9 @@ class SuryaOCRProcessor(S3DownloaderMixin, ProcessorMixin):
         and returns a tensor of image tiles.
         """
 
-        factor = self.patch_size * self.merge_size
+        factor = (
+            self.patch_size * self.merge_size * 4
+        )  # This makes it a multiple of window size
 
         height, width = image.shape[:2]
 

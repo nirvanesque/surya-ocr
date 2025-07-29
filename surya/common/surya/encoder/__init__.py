@@ -73,7 +73,6 @@ class Qwen2_5_VisionPatchEmbed(nn.Module):
         target_dtype = self.proj.weight.dtype
         bsz = hidden_states.shape[0]
         hidden_states = hidden_states.view(
-            bsz,
             -1,
             self.in_channels,
             self.temporal_patch_size,
@@ -166,7 +165,7 @@ class Qwen2_5_VLVisionXLASDPAFlashAttention2(nn.Module):
         q, k, v = (
             self.qkv(hidden_states)
             .reshape(bsz, seq_length, 3, self.num_heads, -1)
-            .permute(1, 0, 2, 3)
+            .permute(2, 0, 1, 3, 4)
             .unbind(0)
         )
         if position_embeddings is None:
@@ -184,23 +183,25 @@ class Qwen2_5_VLVisionXLASDPAFlashAttention2(nn.Module):
         q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
 
         attention_mask = torch.zeros(
-            [bsz, seq_length, seq_length], device=q.device, dtype=torch.bool
+            [bsz, 1, seq_length, seq_length], device=q.device, dtype=torch.bool
         )
         for j in range(bsz):
-            for i in range(1, len(cu_seqlens)):
+            batch_seqlens = cu_seqlens[j]
+            for i in range(1, len(batch_seqlens)):
                 attention_mask[
                     j,
-                    cu_seqlens[i - 1] : cu_seqlens[i],
-                    cu_seqlens[i - 1] : cu_seqlens[i],
+                    ...,
+                    batch_seqlens[i - 1] : batch_seqlens[i],
+                    batch_seqlens[i - 1] : batch_seqlens[i],
                 ] = True
-        q = q.transpose(0, 1)
-        k = k.transpose(0, 1)
-        v = v.transpose(0, 1)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
 
         attn_output = F.scaled_dot_product_attention(
-            q.unsqueeze(0),
-            k.unsqueeze(0),
-            v.unsqueeze(0),
+            q,
+            k,
+            v,
             attention_mask,
             dropout_p=0.0,
         )
@@ -656,6 +657,9 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         grid_thw_list = grid_thw.tolist()
         for batch_item in grid_thw_list:
             row_pos_ids = []
+            heights = [h for _, h, _ in batch_item]
+            widths = [w for _, _, w in batch_item]
+            max_grid_size = max(heights + widths)
             for t, h, w in batch_item:
                 hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
                 hpos_ids = hpos_ids.reshape(
@@ -682,7 +686,6 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
                 )
             # shape: token_count, 2
             pos_ids = torch.cat(row_pos_ids, dim=0)
-            max_grid_size = batch_item[:, 1:].max()
             rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
             rotary_pos_emb_row = rotary_pos_emb_full[pos_ids].flatten(1)
             rotary_pos_emb.append(rotary_pos_emb_row)
@@ -701,6 +704,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
             window_index: list = []
             cu_window_seqlens: list = [0]
             window_index_id = 0
+            print(f"batch item: {batch_item}")
             for grid_t, grid_h, grid_w in batch_item:
                 llm_grid_h, llm_grid_w = (
                     grid_h // self.spatial_merge_size,
@@ -740,6 +744,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
             window_index = torch.cat(window_index, dim=0).to(device=grid_thw.device)
             all_window_index.append(window_index)
             # Shape: (bsz, batch_item_token_count)
+            print(f"Window seqlens batch shape: {len(cu_window_seqlens)}")
             all_window_seqlens.append(cu_window_seqlens)
 
         # Shape : (bsz, batch_item_token_count)
@@ -775,7 +780,8 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
             device=hidden_states.device,
             dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
         )
-        cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
+
+        cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens, dim=-1)
 
         bsz, seq_len, _ = hidden_states.size()
         hidden_states = hidden_states.reshape(
@@ -826,12 +832,12 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
             dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
         )
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
-
         for layer_num, blk in enumerate(self.blocks):
             if layer_num in self.fullatt_block_indexes:
                 cu_seqlens_now = cu_seqlens
             else:
                 cu_seqlens_now = cu_window_seqlens
+
             if self.gradient_checkpointing and self.training:
                 hidden_states = self._gradient_checkpointing_func(
                     blk.__call__,

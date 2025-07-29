@@ -13,7 +13,7 @@ from PIL import Image
 from tqdm import tqdm
 import torch.nn.functional as F
 
-from surya.common.xla import mark_step, get_nearest_pad
+from surya.common.xla import mark_step
 from surya.common.predictor import BasePredictor
 
 from surya.foundation.loader import FoundationModelLoader
@@ -135,7 +135,11 @@ class FoundationPredictor(BasePredictor):
             * self.model.config.sliding_window
         )
         max_cache_len = max_image_tokens + max_text_tokens
-        kv_cache_cls = StaticOpsContinuousBatchingCache if settings.TORCH_DEVICE_MODEL == "xla" else DynamicOpsContinuousBatchingCache
+        kv_cache_cls = (
+            StaticOpsContinuousBatchingCache
+            if settings.TORCH_DEVICE_MODEL == "xla"
+            else DynamicOpsContinuousBatchingCache
+        )
         self.kv_cache = kv_cache_cls(
             self.model.config,
             batch_size,
@@ -455,14 +459,6 @@ class FoundationPredictor(BasePredictor):
                 cache_idxs, batch_size=self.kv_cache.max_batch_size, pad_value=-1
             )
 
-            image_tile_pad = get_nearest_pad(
-                image_tiles.shape[0], settings.FOUNDATION_PAD_TO_NEAREST * 32
-            )
-            image_tiles = self.pad_to_batch_size(image_tiles, batch_size=image_tile_pad)
-            grid_thw = self.pad_to_batch_size(
-                grid_thw, batch_size=self.kv_cache.max_batch_size
-            )
-
         is_special = (
             input_ids.unsqueeze(-1).eq(self.special_token_ids).any(-1)
         )  # (B, L) bool
@@ -471,10 +467,8 @@ class FoundationPredictor(BasePredictor):
             torch.arange(input_ids.size(1), device=input_ids.device, dtype=torch.long)
             + 1
         )  # 1…L
-        special_length = is_special.sum(dim=1)  # (B,) number of special tokens
         last_special_plus1 = (is_special * idx).max(dim=1).values  # (B,) 0 if none
 
-        image_lengths = special_length.to(dtype=torch.long)  # (B,)
         text_lengths = (input_ids.size(1) - last_special_plus1).to(
             dtype=torch.long
         )  # (B,)
@@ -604,7 +598,7 @@ class FoundationPredictor(BasePredictor):
         math_mode: bool = True,
         drop_repeated_tokens: bool = True,
         max_lookahead_tokens: Optional[int] = None,
-        top_k: Optional[int] = None
+        top_k: Optional[int] = None,
     ) -> tuple:
         allowed_tasks = self.tasks.keys()
         assert all([task_name in allowed_tasks for task_name in task_names]), (
@@ -671,7 +665,9 @@ class FoundationPredictor(BasePredictor):
                 scores_cpu = outputs.scores.cpu()
                 bbox_preds_cpu = outputs.bbox_preds.cpu()
                 if top_k is not None:
-                    batch_top_k_probs, batch_top_k_indices = torch.topk(outputs.token_probs, k=top_k, dim=-1)
+                    batch_top_k_probs, batch_top_k_indices = torch.topk(
+                        outputs.token_probs, k=top_k, dim=-1
+                    )
                     batch_top_k_probs_cpu = batch_top_k_probs.cpu()
                     batch_top_k_indices_cpu = batch_top_k_indices.cpu()
 
@@ -691,7 +687,11 @@ class FoundationPredictor(BasePredictor):
 
                             if top_k is not None:
                                 top_k_scores = {
-                                    batch_top_k_indices_cpu[temp_idx, t_idx, k].item(): batch_top_k_probs_cpu[temp_idx, t_idx, k].item()
+                                    batch_top_k_indices_cpu[
+                                        temp_idx, t_idx, k
+                                    ].item(): batch_top_k_probs_cpu[
+                                        temp_idx, t_idx, k
+                                    ].item()
                                     for k in range(top_k)
                                 }
                                 topk_probs[p_idx].append(top_k_scores)
@@ -713,7 +713,9 @@ class FoundationPredictor(BasePredictor):
                 scores_cpu = outputs.scores.cpu()
                 bbox_preds_cpu = outputs.bbox_preds.cpu()
                 if top_k is not None:
-                    batch_top_k_probs, batch_top_k_indices = torch.topk(outputs.token_probs, k=top_k, dim=-1)
+                    batch_top_k_probs, batch_top_k_indices = torch.topk(
+                        outputs.token_probs, k=top_k, dim=-1
+                    )
                     batch_top_k_probs_cpu = batch_top_k_probs.cpu()
                     batch_top_k_indices_cpu = batch_top_k_indices.cpu()
 
@@ -734,7 +736,11 @@ class FoundationPredictor(BasePredictor):
 
                             if top_k is not None:
                                 top_k_scores = {
-                                    batch_top_k_indices_cpu[temp_idx, t_idx, k].item(): batch_top_k_probs_cpu[temp_idx, t_idx, k].item()
+                                    batch_top_k_indices_cpu[
+                                        temp_idx, t_idx, k
+                                    ].item(): batch_top_k_probs_cpu[
+                                        temp_idx, t_idx, k
+                                    ].item()
                                     for k in range(top_k)
                                 }
                                 topk_probs[p_idx].append(top_k_scores)

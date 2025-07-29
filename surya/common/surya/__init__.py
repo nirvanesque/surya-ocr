@@ -315,37 +315,34 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             padded_len = max_grid_size - curr_sample_len
             row_grid = torch.tensor(
                 [
-                    [1, 2, padded_len // 2],
+                    [1, 4, padded_len // 4],
                     grid_thw[i].tolist(),
                 ],
                 dtype=torch.long,
             )
             row_grids.append(row_grid)
 
+        # bsz, 2, 3
+        row_grids = torch.stack(row_grids, dim=0).to(self.device)
+        full_image_grid = full_image_grid.to(self.device)
+        embeddings = self.vision_encoder.embed_images(
+            image_batch=full_image_grid, grid_thw=row_grids
+        )
+
         logger.debug(
             f"Chunking encoder sequence into {len(row_grids) - 1} chunks of size {encoder_chunk_size} with lengths {chunks} and grids {grid_chunks}"
         )
 
-        chunk_embedding_lst = []
-        for i in range(full_image_grid.shape[0]):
-            row_grid = row_grids[i].to(self.device)
-            row_pixels = full_image_grid[i].to(device=self.device)
-
-            chunk_embeddings = self.vision_encoder.embed_images(
-                image_batch=row_pixels, grid_thw=row_grid
-            )
+        # TODO: add 2d positional encoding
+        """
             encoding_2d = self.get_2d_learned_embeddings(
                 row_grid,
                 valid_batch_size=row_grid.shape[0],
                 device=self.device,
                 bbox_size=self.config.image_embed_encoding_multiplier,
             )
-            chunk_embeddings = chunk_embeddings + encoding_2d
-            chunk_embedding_lst.append(chunk_embeddings)
-
-        print(f"Chunk embeddings shape: {chunk_embedding_lst[0].shape}")
-        chunk_embeddings = torch.stack(chunk_embedding_lst, dim=0)
-        return chunk_embeddings
+        """
+        return embeddings
 
     def embed_ids_boxes_images(
         self,

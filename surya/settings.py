@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     FOUNDATION_CHUNK_SIZE: Optional[int] = None
     FOUNDATION_PAD_TO_NEAREST: int = 256  # Pad to the nearest multiple of this value
     COMPILE_FOUNDATION: bool = False
+    FORCE_FOUNDATION_STATIC_CACHE: bool = False
 
     RECOGNITION_BATCH_SIZE: Optional[int] = (
         None  # Defaults to 8 for CPU/MPS, 256 otherwise
@@ -138,6 +139,7 @@ class Settings(BaseSettings):
             self.COMPILE_ALL
             or self.COMPILE_FOUNDATION
             or self.TORCH_DEVICE_MODEL == "xla"
+            or self.FORCE_FOUNDATION_STATIC_CACHE
         )  # We need to static cache and pad to batch size for XLA, since it will recompile otherwise
 
     @computed_field
