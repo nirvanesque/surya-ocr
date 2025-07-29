@@ -72,7 +72,7 @@ class FoundationPredictor(BasePredictor):
         TaskNames.ocr_with_boxes: {
             "needs_bboxes": True,
             "img_size": (1024, 256),  # 370 max tokens
-            "max_tokens": 224,
+            "max_tokens": 768,
         },
         TaskNames.ocr_without_boxes: {
             "needs_bboxes": False,
