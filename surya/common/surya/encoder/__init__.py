@@ -165,8 +165,8 @@ class Qwen2_5_VLVisionXLASDPAFlashAttention2(nn.Module):
         q, k, v = (
             self.qkv(hidden_states)
             .reshape(bsz, seq_length, 3, self.num_heads, -1)
-            .permute(2, 0, 1, 3, 4)
-            .unbind(0)
+            .permute(0, 2, 1, 3, 4)
+            .unbind(1)
         )
         if position_embeddings is None:
             logger.warning_once(
@@ -704,7 +704,6 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
             window_index: list = []
             cu_window_seqlens: list = [0]
             window_index_id = 0
-            print(f"batch item: {batch_item}")
             for grid_t, grid_h, grid_w in batch_item:
                 llm_grid_h, llm_grid_w = (
                     grid_h // self.spatial_merge_size,
@@ -713,8 +712,12 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
                 index = torch.arange(grid_t * llm_grid_h * llm_grid_w).reshape(
                     grid_t, llm_grid_h, llm_grid_w
                 )
-                pad_h = vit_merger_window_size - llm_grid_h % vit_merger_window_size
-                pad_w = vit_merger_window_size - llm_grid_w % vit_merger_window_size
+                pad_h = (
+                    vit_merger_window_size - llm_grid_h % vit_merger_window_size
+                ) % vit_merger_window_size
+                pad_w = (
+                    vit_merger_window_size - llm_grid_w % vit_merger_window_size
+                ) % vit_merger_window_size
                 num_windows_h = (llm_grid_h + pad_h) // vit_merger_window_size
                 num_windows_w = (llm_grid_w + pad_w) // vit_merger_window_size
                 index_padded = F.pad(index, (0, pad_w, 0, pad_h), "constant", -100)
@@ -739,12 +742,11 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
                     seqlens.cumsum(0) * self.spatial_merge_unit + cu_window_seqlens[-1]
                 )
                 cu_window_seqlens.extend(cu_seqlens_tmp.tolist())
-                window_index_id += (grid_t * llm_grid_h * llm_grid_w).item()
+                window_index_id += grid_t * llm_grid_h * llm_grid_w
             # Shape: (batch_item_token_count,)
             window_index = torch.cat(window_index, dim=0).to(device=grid_thw.device)
             all_window_index.append(window_index)
             # Shape: (bsz, batch_item_token_count)
-            print(f"Window seqlens batch shape: {len(cu_window_seqlens)}")
             all_window_seqlens.append(cu_window_seqlens)
 
         # Shape : (bsz, batch_item_token_count)
@@ -756,7 +758,6 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         self,
         hidden_states: torch.Tensor,
         grid_thw: torch.Tensor,
-        valid_grid_len: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -768,9 +769,6 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         Returns:
             `torch.Tensor`: hidden_states.
         """
-        if valid_grid_len is not None:
-            grid_thw = grid_thw[:valid_grid_len]
-
         hidden_states = self.patch_embed(hidden_states)
 
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
@@ -898,10 +896,8 @@ class SuryaEncoderModel(Qwen2_5_VisionTransformerPretrainedModel):
         self,
         image_batch: torch.Tensor,
         grid_thw: torch.Tensor,
-        valid_grid_len: torch.Tensor | None = None,
     ) -> torch.Tensor:
         return super().forward(
             hidden_states=image_batch,
             grid_thw=grid_thw,
-            valid_grid_len=valid_grid_len,
         )
