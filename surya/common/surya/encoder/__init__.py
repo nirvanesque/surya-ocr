@@ -739,7 +739,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
                     seqlens.cumsum(0) * self.spatial_merge_unit + cu_window_seqlens[-1]
                 )
                 cu_window_seqlens.extend(cu_seqlens_tmp.tolist())
-                window_index_id += grid_t * llm_grid_h * llm_grid_w
+                window_index_id += (grid_t * llm_grid_h * llm_grid_w).item()
             # Shape: (batch_item_token_count,)
             window_index = torch.cat(window_index, dim=0).to(device=grid_thw.device)
             all_window_index.append(window_index)

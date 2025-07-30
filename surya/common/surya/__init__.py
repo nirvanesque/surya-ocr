@@ -321,6 +321,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 dtype=torch.long,
             )
             row_grids.append(row_grid)
+            seq_len += curr_sample_len
 
         # bsz, 2, 3
         row_grids = torch.stack(row_grids, dim=0).to(self.device)
@@ -333,15 +334,12 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             f"Chunking encoder sequence into {len(row_grids) - 1} chunks of size {encoder_chunk_size} with lengths {chunks} and grids {grid_chunks}"
         )
 
-        # TODO: add 2d positional encoding
-        """
-            encoding_2d = self.get_2d_learned_embeddings(
-                row_grid,
-                valid_batch_size=row_grid.shape[0],
-                device=self.device,
-                bbox_size=self.config.image_embed_encoding_multiplier,
-            )
-        """
+        encoding_2d = self.get_2d_learned_embeddings(
+            row_grids,
+            bbox_size=self.config.image_embed_encoding_multiplier,
+        )
+        embeddings += encoding_2d
+
         return embeddings
 
     def embed_ids_boxes_images(
@@ -394,35 +392,39 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     def get_2d_learned_embeddings(
         self,
         grid_thw,
-        valid_batch_size: int,
-        device: str | torch.device = "cpu",
         bbox_size: int = 256,
     ):
-        grid_thw = grid_thw[:valid_batch_size]  # ────── (B,3)
         dev = grid_thw.device
-        merge = self.config.merge_size
+        all_row_coords = []
+        all_col_coords = []
+        for row_grid in grid_thw:
+            merge = self.config.merge_size
 
-        # per-sample grid sizes after merge
-        H = (grid_thw[:, 1] // merge).long()  # (B,)
-        W = (grid_thw[:, 2] // merge).long()  # (B,)
+            # per-sample grid sizes after merge
+            H = (row_grid[:, 1] // merge).long()  # (B,)
+            W = (row_grid[:, 2] // merge).long()  # (B,)
 
-        row_coords = torch.cat(
-            [
-                torch.linspace(0, bbox_size, steps=int(h), device=dev)
-                .round()
-                .repeat_interleave(w)  # repeat each row value w times
-                for h, w in zip(H.tolist(), W.tolist())
-            ]
-        )  # (full_grid_size,)
+            row_coords = torch.cat(
+                [
+                    torch.linspace(0, bbox_size, steps=int(h), device=dev)
+                    .round()
+                    .repeat_interleave(w)  # repeat each row value w times
+                    for h, w in zip(H.tolist(), W.tolist())
+                ]
+            )  # (full_grid_size,)
 
-        col_coords = torch.cat(
-            [
-                torch.linspace(0, bbox_size, steps=int(w), device=dev)
-                .round()
-                .repeat(int(h))  # tile the column vector h times
-                for h, w in zip(H.tolist(), W.tolist())
-            ]
-        )  # (full_grid_size,)
+            col_coords = torch.cat(
+                [
+                    torch.linspace(0, bbox_size, steps=int(w), device=dev)
+                    .round()
+                    .repeat(int(h))  # tile the column vector h times
+                    for h, w in zip(H.tolist(), W.tolist())
+                ]
+            )  # (full_grid_size,)
+            all_row_coords.append(row_coords)
+            all_col_coords.append(col_coords)
+        row_coords = torch.stack(all_row_coords, dim=0)
+        col_coords = torch.stack(all_col_coords, dim=0)
 
         emb = self.img_h_embed(row_coords.long()) + self.img_w_embed(col_coords.long())
         return emb
