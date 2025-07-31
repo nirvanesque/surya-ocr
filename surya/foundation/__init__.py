@@ -453,12 +453,14 @@ class FoundationPredictor(BasePredictor):
 
         return new_input, processed_outputs, idxs_to_merge
 
-    def get_max_image_token_count(self, task_name: TaskNames) -> int:
-        dummy_image = np.zeros(shape=(*self.tasks[task_name]["img_size"], 3))
-        tiles, _ = self.processor._process_and_tile(dummy_image)
+    def get_max_image_token_count(self, images: list[np.ndarray]) -> int:
+        largest_image = max(images, key=lambda img: img.shape[0] * img.shape[1])
+
+        tiles, _ = self.processor._process_and_tile(largest_image)
+
         num_image_tokens = tiles.shape[0] / self.processor.merge_size**2
-        
-        # Extra 1 to account for rotation token when present.
+
+        # Extra 1 to account for rotation token when present
         return 1 + self.processor.num_register_tokens + int(num_image_tokens)
 
     def prediction_loop(
@@ -487,7 +489,7 @@ class FoundationPredictor(BasePredictor):
         batch_size = min(len(images), batch_size)
         current_inputs = None
         
-        max_image_tokens = max(self.get_max_image_token_count(task) for task in set(task_names))
+        max_image_tokens = self.get_max_image_token_count(images)
         self.setup_cache(batch_size, max_cache_len=max_image_tokens + self.model.config.sliding_window)
 
         batch_max_tokens = {}
