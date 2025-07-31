@@ -508,7 +508,6 @@ class FoundationPredictor(BasePredictor):
             batch_max_tokens[idx] = (
                 max_tokens or settings.FOUNDATION_MAX_TOKENS or self.tasks[task]["max_tokens"]
             )
-            print(batch_max_tokens[idx])
 
         overall_max_tokens = max(batch_max_tokens.values())
 
