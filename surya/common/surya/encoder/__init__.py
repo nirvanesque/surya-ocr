@@ -775,7 +775,6 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         hidden_states = self.patch_embed(hidden_states)
 
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
-        print(f"grid thw: {grid_thw}")
         window_index, cu_window_seqlens = self.get_window_index(grid_thw)
         max_window_seqlens = max([len(cu_window) for cu_window in cu_window_seqlens])
         for row in cu_window_seqlens:
@@ -795,6 +794,9 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         hidden_states = hidden_states.reshape(
             bsz, seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1
         )
+        rotary_pos_emb = rotary_pos_emb.reshape(
+            bsz, seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1
+        )
 
         reordered_hidden_states = []
         reordered_rotary_pos_emb = []
@@ -804,9 +806,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
             batch_hidden = hidden_states[
                 batch_idx
             ]  # (seq_len // spatial_merge_unit, spatial_merge_unit, hidden_dim)
-            batch_rotary = rotary_pos_emb[batch_idx].reshape(
-                seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1
-            )  # (seq_len // spatial_merge_unit, spatial_merge_unit, embed_dim)
+            batch_rotary = rotary_pos_emb[batch_idx]
 
             # Apply window reordering for this batch item
             reordered_batch_hidden = batch_hidden[
@@ -840,6 +840,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
             dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
         )
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
+        print(cu_seqlens)
         for layer_num, blk in enumerate(self.blocks):
             if layer_num in self.fullatt_block_indexes:
                 cu_seqlens_now = cu_seqlens

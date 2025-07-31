@@ -294,8 +294,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         valid_batch_size: torch.Tensor | None = None,
     ):
         # embed all images with the vision encoder after they have already been tiled and flattened into a single batch
-        chunks = [0]
-        grid_chunks = [0]
         unpadded_max_grid_size = (
             grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]
         ).max()
@@ -303,8 +301,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             unpadded_max_grid_size,
         )  # If we need zero padding, we still need to allocate a bit of room for the extra grid_thw
 
-        # Ensure we always have 2 elements in each row, and no zeros
-        if unpadded_max_grid_size == max_grid_size:
+        if max_grid_size == unpadded_max_grid_size:
             max_grid_size += 16
 
         full_image_grid = torch.zeros(
@@ -321,26 +318,31 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 seq_len : seq_len + curr_sample_len
             ]
             padded_len = max_grid_size - curr_sample_len
-            row_grid = torch.tensor(
-                [
-                    [1, 4, padded_len // 4],
-                    grid_thw[i].tolist(),
-                ],
-                dtype=torch.long,
-            )
+            if padded_len > 0:
+                row_grid = torch.tensor(
+                    [
+                        [1, 4, padded_len // 4],
+                        grid_thw[i].tolist(),
+                    ],
+                    dtype=torch.long,
+                )
+            else:
+                row_grid = torch.tensor(
+                    [
+                        grid_thw[i].tolist(),
+                    ],
+                    dtype=torch.long,
+                )
 
             row_grids.append(row_grid)
             seq_len += curr_sample_len
 
         # bsz, 2, 3
         row_grids = torch.stack(row_grids, dim=0).to(self.device)
+        print(f"Row grid thw {row_grids}")
         full_image_grid = full_image_grid.to(self.device)
         embeddings = self.vision_encoder.embed_images(
             image_batch=full_image_grid, grid_thw=row_grids
-        )
-
-        logger.debug(
-            f"Chunking encoder sequence into {len(row_grids) - 1} chunks of size {encoder_chunk_size} with lengths {chunks} and grids {grid_chunks}"
         )
 
         encoding_2d = self.get_2d_learned_embeddings(
@@ -376,8 +378,14 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 f"Inserting image embeddings at token id {self.config.image_token_id}"
             )
             mask = input_ids == image_token_id_tensor
-            last_positions = mask.long().argmax(dim=1, keepdim=True)
-            start_positions = last_positions - image_embeddings[0].shape[0]
+            last_image_token_pos = (
+                mask.size(1)
+                - 1
+                - mask.flip(dims=[1]).long().argmax(dim=1, keepdim=True)
+            )
+            # Calculate start position to replace N positions ending at (and including) the last image token
+            start_positions = last_image_token_pos - image_embeddings[0].shape[0]
+            print(f"last pos: {last_image_token_pos} start pos: {start_positions}")
 
             batch_size, insert_len = image_embeddings.shape[:2]
             batch_indices = torch.arange(
@@ -396,6 +404,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 "Image tokens were present in the input but no input images were provided"
             )
 
+        inputs_embeds[input_ids == self.config.pad_token_id] = 0
         return inputs_embeds
 
     def get_2d_learned_embeddings(
