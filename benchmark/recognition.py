@@ -84,6 +84,12 @@ def normalize_text(text: str) -> str:
 @click.option(
     "--max_rows", type=int, help="Maximum number of pdf pages to OCR.", default=None
 )
+@click.option(
+    "--max_samples",
+    type=int,
+    help="Maximum number of samples to benchmark.",
+    default=None,
+)
 @click.option("--debug", is_flag=True, help="Enable debug mode.", default=False)
 @click.option(
     "--tesseract", is_flag=True, help="Run benchmarks on tesseract.", default=False
@@ -107,6 +113,7 @@ def normalize_text(text: str) -> str:
 def main(
     results_dir: str,
     max_rows: int,
+    max_samples: int,
     debug: bool,
     tesseract: bool,
     textract: bool,

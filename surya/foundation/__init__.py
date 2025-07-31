@@ -137,7 +137,10 @@ class FoundationPredictor(BasePredictor):
         max_cache_len = max_image_tokens + max_text_tokens
         kv_cache_cls = (
             StaticOpsContinuousBatchingCache
-            if settings.TORCH_DEVICE_MODEL == "xla"
+            if (
+                settings.TORCH_DEVICE_MODEL == "xla"
+                or settings.FORCE_FOUNDATION_STATIC_CACHE
+            )
             else DynamicOpsContinuousBatchingCache
         )
         self.kv_cache = kv_cache_cls(

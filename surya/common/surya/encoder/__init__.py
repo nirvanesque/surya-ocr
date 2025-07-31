@@ -692,6 +692,9 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         rotary_pos_emb = torch.stack(rotary_pos_emb, dim=0)
         return rotary_pos_emb
 
+    def get_padding_window_index(self, row_grid_thw):
+        pass
+
     def get_window_index(self, grid_thw):
         grid_thw_list = grid_thw.tolist()
         vit_merger_window_size = (
@@ -772,7 +775,14 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         hidden_states = self.patch_embed(hidden_states)
 
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
+        print(f"grid thw: {grid_thw}")
         window_index, cu_window_seqlens = self.get_window_index(grid_thw)
+        max_window_seqlens = max([len(cu_window) for cu_window in cu_window_seqlens])
+        for row in cu_window_seqlens:
+            if len(row) < max_window_seqlens:
+                # Pad the sequence lengths to the maximum length
+                row.extend([-1] * (max_window_seqlens - len(row)))
+
         cu_window_seqlens = torch.tensor(
             cu_window_seqlens,
             device=hidden_states.device,

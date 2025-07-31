@@ -296,9 +296,17 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         # embed all images with the vision encoder after they have already been tiled and flattened into a single batch
         chunks = [0]
         grid_chunks = [0]
+        unpadded_max_grid_size = (
+            grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]
+        ).max()
         max_grid_size = get_nearest_pad(
-            (grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]).max()
-        )
+            unpadded_max_grid_size,
+        )  # If we need zero padding, we still need to allocate a bit of room for the extra grid_thw
+
+        # Ensure we always have 2 elements in each row, and no zeros
+        if unpadded_max_grid_size == max_grid_size:
+            max_grid_size += 16
+
         full_image_grid = torch.zeros(
             (valid_batch_size, max_grid_size, pixel_values.shape[-1]),
             dtype=pixel_values.dtype,
@@ -320,6 +328,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 ],
                 dtype=torch.long,
             )
+
             row_grids.append(row_grid)
             seq_len += curr_sample_len
 
