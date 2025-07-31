@@ -347,6 +347,8 @@ class RecognitionPredictor(BasePredictor):
         math_mode: bool = True,
         return_words: bool = False,
         drop_repeated_text: bool = False,
+        max_sliding_window: int | None = None,
+        max_tokens: int | None = None,
     ) -> List[OCRResult]:
         if task_names is None:
             task_names = [TaskNames.ocr_with_boxes] * len(images)
@@ -426,7 +428,9 @@ class RecognitionPredictor(BasePredictor):
             batch_size=recognition_batch_size,
             math_mode=math_mode,
             drop_repeated_tokens=True,
-            max_lookahead_tokens=0
+            max_lookahead_tokens=0,
+            max_sliding_window=max_sliding_window,
+            max_tokens=max_tokens,
         )
 
         # Get text and bboxes in structured form

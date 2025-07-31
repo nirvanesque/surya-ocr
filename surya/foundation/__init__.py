@@ -72,7 +72,7 @@ class FoundationPredictor(BasePredictor):
         TaskNames.ocr_with_boxes: {
             "needs_bboxes": True,
             "img_size": (1024, 512),
-            "max_tokens": 1024,
+            "max_tokens": 224,
         },
         TaskNames.ocr_without_boxes: {
             "needs_bboxes": False,
@@ -123,12 +123,12 @@ class FoundationPredictor(BasePredictor):
                 chunk_size = self.encoder_chunk_sizes[settings.TORCH_DEVICE_MODEL]
         return chunk_size
 
-    def setup_cache(self, batch_size: int, max_cache_len: int):
+    def setup_cache(self, batch_size: int, max_cache_len: int, max_sliding_window: int):
         self.kv_cache = ContinuousBatchingCache(
             self.model.config,
             batch_size,
             max_cache_len,
-            text_sliding_window=self.model.config.sliding_window,
+            text_sliding_window=max_sliding_window,
             device=self.model.device,
             dtype=self.model.dtype
         )
@@ -469,6 +469,8 @@ class FoundationPredictor(BasePredictor):
         input_texts: List[str],
         task_names: List[TaskNames],
         batch_size: int | None = None,
+        max_tokens: int | None = None,
+        max_sliding_window: int | None = None,
         math_mode: bool = True,
         drop_repeated_tokens: bool = True,
         max_lookahead_tokens: Optional[int] = None,
@@ -490,7 +492,9 @@ class FoundationPredictor(BasePredictor):
         current_inputs = None
         
         max_image_tokens = self.get_max_image_token_count(images)
-        self.setup_cache(batch_size, max_cache_len=max_image_tokens + self.model.config.sliding_window)
+        if max_sliding_window is None:
+            max_sliding_window = self.model.config.sliding_window
+        self.setup_cache(batch_size, max_cache_len=max_image_tokens + max_sliding_window, max_sliding_window=max_sliding_window)
 
         batch_max_tokens = {}
         for idx, (img, txt, task) in enumerate(
@@ -502,8 +506,9 @@ class FoundationPredictor(BasePredictor):
                 )
             )
             batch_max_tokens[idx] = (
-                settings.FOUNDATION_MAX_TOKENS or self.tasks[task]["max_tokens"]
+                max_tokens or settings.FOUNDATION_MAX_TOKENS or self.tasks[task]["max_tokens"]
             )
+            print(batch_max_tokens[idx])
 
         overall_max_tokens = max(batch_max_tokens.values())
 
@@ -544,7 +549,7 @@ class FoundationPredictor(BasePredictor):
 
                             if top_k > 0:
                                 top_k_scores = {
-                                    batch_top_k_indices[k].item(): batch_top_k_probs[k].item()
+                                    batch_top_k_indices_cpu[temp_idx, t_idx][k].item(): batch_top_k_probs_cpu[temp_idx, t_idx][k].item()
                                     for k in range(top_k)
                                 }
                                 topk_probs[p_idx].append(top_k_scores)
@@ -581,7 +586,7 @@ class FoundationPredictor(BasePredictor):
 
                             if top_k > 0:
                                 top_k_scores = {
-                                    batch_top_k_indices[k].item(): batch_top_k_probs[k].item()
+                                    batch_top_k_indices_cpu[temp_idx, t_idx][k].item(): batch_top_k_probs_cpu[temp_idx, t_idx][k].item()
                                     for k in range(top_k)
                                 }
                                 topk_probs[p_idx].append(top_k_scores)
