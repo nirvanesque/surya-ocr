@@ -25,7 +25,7 @@ from surya.recognition.util import (
     clean_close_polygons,
     unwrap_math,
     clean_math_tags,
-    clean_structure_tags,
+    filter_blacklist_tags,
     words_from_chars
 )
 from surya.foundation.util import detect_repeat_token, prediction_to_polygon_batch
@@ -492,10 +492,10 @@ class RecognitionPredictor(BasePredictor):
                     text_line = fix_unbalanced_tags(
                         text_line, self.processor.ocr_tokenizer.special_tokens
                     )
+                    text_line = filter_blacklist_tags(text_line)
                     text = "".join([char.text for char in text_line])
                     text = unwrap_math(text)
                     text = clean_math_tags(text)
-                    text = clean_structure_tags(text)
                     lines.append(
                         TextLine(
                             text=text,
