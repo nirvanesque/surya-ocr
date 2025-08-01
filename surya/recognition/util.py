@@ -29,7 +29,7 @@ def unwrap_math(text: str) -> str:
 
 MATH_BLOCK = re.compile(r"(<math\b[^>]*>)(.*?)</math>", flags=re.I | re.S)
 STRIP_TAGS = re.compile(r"</?(?:br|u|del|mark|i|b|sup|sub)\b[^>]*>", flags=re.I | re.S)
-BLACKLIST_TAGS = {"p", "li", "ul", "ol"}
+BLACKLIST_TAGS = {"p", "li", "ul", "ol", "table", "td", "tr", "th"}
 
 def filter_blacklist_tags(text_chars: List[TextChar]) -> List[TextChar]:
     filtered_chars = []
