@@ -504,6 +504,7 @@ class RecognitionPredictor(BasePredictor):
         flat: dict,
         recognition_batch_size: int | None = None,
         math_mode: bool = True,
+        max_tokens: int | None = None,
     ) -> tuple:
         predicted_tokens = [[] for _ in range(len(flat["slices"]))]
         scores = [[] for _ in range(len(flat["slices"]))]
@@ -523,7 +524,7 @@ class RecognitionPredictor(BasePredictor):
                 )
             )
             batch_max_tokens[idx] = (
-                settings.RECOGNITION_MAX_TOKENS or self.tasks[task]["max_tokens"]
+                max_tokens or settings.RECOGNITION_MAX_TOKENS or self.tasks[task]["max_tokens"]
             )
 
         overall_max_tokens = max(batch_max_tokens.values())
@@ -786,6 +787,7 @@ class RecognitionPredictor(BasePredictor):
         math_mode: bool = True,
         return_words: bool = False,
         drop_repeated_text: bool = False,
+        max_tokens: int | None = None,
     ) -> List[OCRResult]:
         allowed_tasks = self.tasks.keys()
         if task_names is None:
@@ -856,7 +858,7 @@ class RecognitionPredictor(BasePredictor):
 
         # Make predictions
         predicted_tokens, batch_bboxes, scores = self.prediction_loop(
-            flat, recognition_batch_size=recognition_batch_size, math_mode=math_mode
+            flat, recognition_batch_size=recognition_batch_size, math_mode=math_mode, max_tokens=max_tokens
         )
 
         # Get text and bboxes in structured form
