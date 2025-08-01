@@ -454,14 +454,8 @@ class FoundationPredictor(BasePredictor):
         return new_input, processed_outputs, idxs_to_merge
 
     def get_max_image_token_count(self, images: list[np.ndarray]) -> int:
-        largest_image = max(images, key=lambda img: img.shape[0] * img.shape[1])
-
-        tiles, _ = self.processor._process_and_tile(largest_image)
-
-        num_image_tokens = tiles.shape[0] / self.processor.merge_size**2
-
         # Extra 1 to account for rotation token when present
-        return 1 + self.processor.num_register_tokens + int(num_image_tokens)
+        return 1 + self.processor.num_register_tokens + 2048
 
     def prediction_loop(
         self,
