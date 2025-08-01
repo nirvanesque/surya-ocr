@@ -339,7 +339,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
 
         # bsz, 2, 3
         row_grids = torch.stack(row_grids, dim=0).to(self.device)
-        print(f"Row grid thw {row_grids}")
         full_image_grid = full_image_grid.to(self.device)
         embeddings = self.vision_encoder.embed_images(
             image_batch=full_image_grid, grid_thw=row_grids
@@ -385,7 +384,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             )
             # Calculate start position to replace N positions ending at (and including) the last image token
             start_positions = last_image_token_pos - image_embeddings[0].shape[0]
-            print(f"last pos: {last_image_token_pos} start pos: {start_positions}")
 
             batch_size, insert_len = image_embeddings.shape[:2]
             batch_indices = torch.arange(

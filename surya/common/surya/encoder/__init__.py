@@ -747,7 +747,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
                 cu_window_seqlens.extend(cu_seqlens_tmp.tolist())
                 window_index_id += grid_t * llm_grid_h * llm_grid_w
             # Shape: (batch_item_token_count,)
-            window_index = torch.cat(window_index, dim=0).to(device=grid_thw.device)
+            window_index = torch.cat(window_index, dim=0)
             all_window_index.append(window_index)
             # Shape: (bsz, batch_item_token_count)
             all_window_seqlens.append(cu_window_seqlens)
@@ -784,11 +784,14 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
 
         cu_window_seqlens = torch.tensor(
             cu_window_seqlens,
-            device=hidden_states.device,
             dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
         )
 
         cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens, dim=-1)
+
+        # move to device
+        cu_window_seqlens = cu_window_seqlens.to(hidden_states.device)
+        window_index = window_index.to(hidden_states.device)
 
         bsz, seq_len, _ = hidden_states.size()
         hidden_states = hidden_states.reshape(
@@ -840,7 +843,6 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
             dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
         )
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
-        print(cu_seqlens)
         for layer_num, blk in enumerate(self.blocks):
             if layer_num in self.fullatt_block_indexes:
                 cu_seqlens_now = cu_seqlens
