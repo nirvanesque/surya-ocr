@@ -29,7 +29,11 @@ def unwrap_math(text: str) -> str:
 
 MATH_BLOCK = re.compile(r"(<math\b[^>]*>)(.*?)</math>", flags=re.I | re.S)
 STRIP_TAGS = re.compile(r"</?(?:br|u|del|mark|i|b|sup|sub)\b[^>]*>", flags=re.I | re.S)
+STRUCTURE_TAGS = re.compile(r'</?(ol|ul|li|p)(\s+[^>]*)?>')
 
+def clean_structure_tags(html: str) -> str:
+    # strip unwanted html tags like <p> or <ol>
+    return STRUCTURE_TAGS.sub('', html)
 
 def clean_math_tags(html: str) -> str:
     # strip unwanted tags inside every well‑formed <math>…</math>
