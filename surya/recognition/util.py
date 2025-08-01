@@ -55,6 +55,43 @@ def clean_math_tags(html: str) -> str:
             parts.append(token)
     return "".join(parts)
 
+BLACKLIST_TAGS = {"p", "li", "ul", "ol", "table", "td", "th", "tr"}
+
+def filter_blacklist_tags(text_chars: List[TextChar]) -> List[TextChar]:
+    filtered_chars = []
+    char_buffer = []
+    in_tag = False
+
+    for text_char in text_chars:
+        char = text_char.text
+
+        if char == "<":
+            in_tag = True
+            char_buffer = [text_char]
+        elif in_tag:
+            char_buffer.append(text_char)
+            if char == ">":
+                full_tag = ''.join(c.text for c in char_buffer)
+                inner = full_tag[1:-1].strip()  # remove < >
+                tag_name_candidate = inner.strip("/").split()[0]  # remove '/' and any attributes
+
+                if tag_name_candidate in BLACKLIST_TAGS:
+                    # Discard tag
+                    pass
+                else:
+                    # Keep tag
+                    filtered_chars.extend(char_buffer)
+
+                in_tag = False
+                char_buffer = []
+        else:
+            filtered_chars.append(text_char)
+
+    # Flush buffer if we never reached a tag close
+    if char_buffer:
+        filtered_chars.extend(char_buffer)
+
+    return filtered_chars
 
 def detect_repeat_token(predicted_tokens: List[int], max_repeats: int = 40):
     if len(predicted_tokens) < max_repeats:

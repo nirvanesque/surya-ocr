@@ -35,6 +35,7 @@ from surya.recognition.util import (
     prediction_to_polygon_batch,
     unwrap_math,
     clean_math_tags,
+    filter_blacklist_tags
 )
 from surya.recognition.schema import TextLine, OCRResult, TextChar
 from surya.common.surya.schema import TaskNames
@@ -916,6 +917,7 @@ class RecognitionPredictor(BasePredictor):
                     text_line = fix_unbalanced_tags(
                         text_line, self.processor.ocr_tokenizer.special_tokens
                     )
+                    text_line = filter_blacklist_tags(text_line)
                     text = "".join([char.text for char in text_line])
                     text = unwrap_math(text)
                     text = clean_math_tags(text)
