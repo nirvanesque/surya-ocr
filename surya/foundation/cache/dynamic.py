@@ -180,26 +180,33 @@ class DynamicOpsContinuousBatchingLayerCache():
             value_cache[:, :, -sliding_window:] = v_slice_rolled
 
         # Insert only **valid tokens** into the cache. These are **right aligned** within the input sequence
-        seq_indices = torch.arange(seq_len, device=device)[None, :]
-        start_indices = seq_len - num_valid_tokens[:, None]
-        source_mask = seq_indices >= start_indices
-        source_mask_expanded = source_mask[:, None, :, None].expand(batch_size, num_head, seq_len, head_dim)
-        
         insert_positions = torch.where(
             needs_rotate,
             max_cache_len - num_valid_tokens,
             text_token_counts + cache_text_start
         )
-        # Step 2: Create target mask in cache coordinates
-        cache_indices = torch.arange(max_cache_len, device=device)[None, :]
-        insert_start = insert_positions[:, None]
-        insert_end = insert_start + num_valid_tokens[:, None]
-        cache_target_mask = ((cache_indices >= insert_start) & 
-                            (cache_indices < insert_end))
-        cache_target_mask_expanded = cache_target_mask[:, None, :, None].expand(batch_size, num_head, max_cache_len, head_dim)
-        
-        key_cache[cache_target_mask_expanded] = key_states[source_mask_expanded]
-        value_cache[cache_target_mask_expanded] = value_states[source_mask_expanded]
+
+        max_tokens = num_valid_tokens.max().item()
+        offsets = torch.arange(max_tokens, device=device).unsqueeze(0)  # [1, max_T]
+        valid_mask = offsets < num_valid_tokens.unsqueeze(1)  # [B, max_T]
+        src_indices = (seq_len - num_valid_tokens).unsqueeze(1) + offsets  # [B, max_T]
+        src_indices = src_indices.clamp(max=seq_len - 1)  # safety
+
+        tgt_indices = insert_positions.unsqueeze(1) + offsets  # [B, max_T]
+        tgt_indices = tgt_indices.clamp(max=max_cache_len - 1)  # safety
+
+        src_idx_exp = src_indices.unsqueeze(1).unsqueeze(-1).expand(batch_size, num_head, max_tokens, head_dim)
+        tgt_idx_exp = tgt_indices.unsqueeze(1).unsqueeze(-1).expand(batch_size, num_head, max_tokens, head_dim)
+        valid_mask_exp = valid_mask.unsqueeze(1).unsqueeze(-1).expand(batch_size, num_head, max_tokens, head_dim)
+
+        k_src = torch.gather(key_states, 2, src_idx_exp)
+        v_src = torch.gather(value_states, 2, src_idx_exp)
+        k_src = k_src * valid_mask_exp
+        v_src = v_src * valid_mask_exp
+
+        # Write into cache
+        key_cache.scatter_(2, tgt_idx_exp, k_src)
+        value_cache.scatter_(2, tgt_idx_exp, v_src)
 
         # In-place edit - Mutates
         text_token_counts += num_valid_tokens

@@ -140,7 +140,7 @@ class FoundationPredictor(BasePredictor):
             self.model.config,
             batch_size,
             max_cache_len,
-            text_sliding_window=self.model.config.sliding_window,
+            text_sliding_window=max_text_tokens,
             device=self.model.device,
             dtype=self.model.dtype,
         )
@@ -587,13 +587,42 @@ class FoundationPredictor(BasePredictor):
 
         return new_input, processed_outputs, idxs_to_merge
 
-    def get_max_image_token_count(self, task_name: TaskNames) -> int:
-        dummy_image = np.zeros(shape=(*self.tasks[task_name]["img_size"], 3))
-        tiles, _ = self.processor._process_and_tile(dummy_image)
-        num_image_tokens = tiles.shape[0] / self.processor.merge_size**2
+    def get_max_image_token_count(self, images: list[np.ndarray], tasks: List[TaskNames]) -> int:
+        def compute_scaled_size(H: int, W: int, max_size: Tuple[int, int]) -> Tuple[int, int]:
+            max_W, max_H = max_size
+            min_W, min_H = (168, 168)
 
-        # Extra 1 to account for rotation token when present.
-        return 1 + self.processor.num_register_tokens + int(num_image_tokens)
+            current_pixels = H * W
+            max_pixels = max_H * max_W
+            min_pixels = min_H * min_W
+
+            if current_pixels > max_pixels:
+                scale = (max_pixels / current_pixels) ** 0.5
+                return math.floor(H * scale), math.floor(W * scale)
+            elif current_pixels < min_pixels:
+                scale = (min_pixels / current_pixels) ** 0.5
+                return math.ceil(H * scale), math.ceil(W * scale)
+            return H, W
+
+        def get_tile_count(H: int, W: int, factor: int) -> int:
+            H_bar = math.ceil(H / factor) * factor
+            W_bar = math.ceil(W / factor) * factor
+            grid_h = H_bar / self.processor.patch_size
+            grid_w = W_bar // self.processor.patch_size
+            return grid_h * grid_w
+
+        max_tokens = 0
+        factor = self.processor.patch_size * self.processor.merge_size
+
+        for image, task in zip(images, tasks):
+            H, W = image.shape[:2]
+            max_size = self.tasks[task]["img_size"]
+            scaled_H, scaled_W = compute_scaled_size(H, W, max_size)
+            token_count = get_tile_count(scaled_H, scaled_W, factor) / (self.processor.merge_size ** 2)
+            max_tokens = max(max_tokens, token_count)
+
+        # Extra 10 to account for EOS/BOS/Rotation token etc.
+        return 10 + self.processor.num_register_tokens + int(max_tokens)
 
     def prediction_loop(
         self,
@@ -624,9 +653,7 @@ class FoundationPredictor(BasePredictor):
 
         current_inputs = None
 
-        max_image_tokens = max(
-            self.get_max_image_token_count(task) for task in set(task_names)
-        )
+        max_image_tokens = self.get_max_image_token_count(images, task_names)
         self.setup_cache(
             batch_size,
             max_image_tokens=max_image_tokens,
