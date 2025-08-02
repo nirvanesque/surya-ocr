@@ -29,6 +29,43 @@ def unwrap_math(text: str) -> str:
 
 MATH_BLOCK = re.compile(r"(<math\b[^>]*>)(.*?)</math>", flags=re.I | re.S)
 STRIP_TAGS = re.compile(r"</?(?:br|u|del|mark|i|b|sup|sub)\b[^>]*>", flags=re.I | re.S)
+BLACKLIST_TAGS = {"p", "li", "ul", "ol", "table", "td", "tr", "th"}
+
+def filter_blacklist_tags(text_chars: List[TextChar]) -> List[TextChar]:
+    filtered_chars = []
+    char_buffer = []
+    in_tag = False
+
+    for text_char in text_chars:
+        char = text_char.text
+
+        if char == "<":
+            in_tag = True
+            char_buffer = [text_char]
+        elif in_tag:
+            char_buffer.append(text_char)
+            if char == ">":
+                full_tag = ''.join(c.text for c in char_buffer)
+                inner = full_tag[1:-1].strip()  # remove < >
+                tag_name_candidate = inner.strip("/").split()[0]  # remove '/' and any attributes
+
+                if tag_name_candidate in BLACKLIST_TAGS:
+                    # Discard tag
+                    pass
+                else:
+                    # Keep tag
+                    filtered_chars.extend(char_buffer)
+
+                in_tag = False
+                char_buffer = []
+        else:
+            filtered_chars.append(text_char)
+
+    # Flush buffer if we never reached a tag close
+    if char_buffer:
+        filtered_chars.extend(char_buffer)
+
+    return filtered_chars
 
 
 def clean_math_tags(html: str) -> str:

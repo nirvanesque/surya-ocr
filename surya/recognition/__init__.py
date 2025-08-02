@@ -4,7 +4,9 @@ import re
 from typing import List
 
 import numpy as np
+import torch
 from PIL import Image
+import torch.nn.functional as F
 
 from surya.common.polygon import PolygonBox
 from surya.common.surya.processor import NOMATH_TOKEN
@@ -23,7 +25,8 @@ from surya.recognition.util import (
     clean_close_polygons,
     unwrap_math,
     clean_math_tags,
-    words_from_chars,
+    filter_blacklist_tags,
+    words_from_chars
 )
 from surya.foundation.util import detect_repeat_token, prediction_to_polygon_batch
 from surya.recognition.schema import TextLine, OCRResult, TextChar
@@ -34,10 +37,9 @@ from surya.logging import get_logger, configure_logging
 configure_logging()
 logger = get_logger()
 
-
 class RecognitionPredictor(BasePredictor):
     batch_size = settings.RECOGNITION_BATCH_SIZE
-    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 96}
+    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 128}
 
     # Override base init - Do not load model
     def __init__(self, foundation_predictor: FoundationPredictor):
@@ -346,10 +348,12 @@ class RecognitionPredictor(BasePredictor):
         math_mode: bool = True,
         return_words: bool = False,
         drop_repeated_text: bool = False,
+        max_sliding_window: int | None = None,
+        max_tokens: int | None = None,
     ) -> List[OCRResult]:
         if task_names is None:
             task_names = [TaskNames.ocr_with_boxes] * len(images)
-        if recognition_batch_size is not None:
+        if recognition_batch_size is None:
             recognition_batch_size = self.get_batch_size()
 
         assert len(images) == len(task_names), (
@@ -401,7 +405,12 @@ class RecognitionPredictor(BasePredictor):
 
         # No images passed, or no boxes passed, or no text detected in the images
         if len(flat["slices"]) == 0:
-            return []
+            return [
+                OCRResult(
+                    text_lines=[], image_bbox=[0, 0, im.size[0], im.size[1]]
+                )
+                for im in images
+            ]
 
         # Sort by line widths. Negative so that longer images come first, fits in with continuous batching better
         sorted_pairs = sorted(enumerate(flat["slices"]), key=lambda x: -x[1].shape[1])
@@ -420,6 +429,9 @@ class RecognitionPredictor(BasePredictor):
             batch_size=recognition_batch_size,
             math_mode=math_mode,
             drop_repeated_tokens=True,
+            max_lookahead_tokens=0,
+            max_sliding_window=max_sliding_window,
+            max_tokens=max_tokens,
         )
 
         # Get text and bboxes in structured form
@@ -480,6 +492,7 @@ class RecognitionPredictor(BasePredictor):
                     text_line = fix_unbalanced_tags(
                         text_line, self.processor.ocr_tokenizer.special_tokens
                     )
+                    text_line = filter_blacklist_tags(text_line)
                     text = "".join([char.text for char in text_line])
                     text = unwrap_math(text)
                     text = clean_math_tags(text)
