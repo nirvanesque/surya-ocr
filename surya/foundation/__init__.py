@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from collections import deque
@@ -21,9 +22,9 @@ from surya.foundation.util import (
     detect_repeat_token,
 )
 from surya.common.surya.schema import TaskNames
-from surya.foundation.cache import (
-    ContinuousBatchingCache,
-)
+from surya.foundation.cache.dynamic_ops import DynamicOpsCache
+from surya.foundation.cache.static_ops import StaticOpsCache
+
 from surya.settings import settings
 from surya.logging import get_logger, configure_logging
 
@@ -65,7 +66,7 @@ class FoundationPredictor(BasePredictor):
         settings.RECOGNITION_BATCH_SIZE
     )  # Default to the recognition batch size
     torch_dtype = None  # No default, loader picks the dtype based on device properties - bf16/fp16
-    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 128}
+    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 64}
     encoder_chunk_size: int = 4096  # Default chunk size
     encoder_chunk_sizes = {"cpu": 4096, "mps": 4096, "cuda": 32768, "xla": 32768}
     min_prefill_ratio: int = 0.2
@@ -130,7 +131,10 @@ class FoundationPredictor(BasePredictor):
         return chunk_size
 
     def setup_cache(self, batch_size: int, max_cache_len: int, max_sliding_window: int):
-        self.kv_cache = ContinuousBatchingCache(
+        kv_cache_cls = (
+            StaticOpsCache if settings.TORCH_DEVICE == "xla" else DynamicOpsCache
+        )
+        self.kv_cache = kv_cache_cls(
             self.model.config,
             batch_size,
             max_cache_len,
@@ -218,10 +222,7 @@ class FoundationPredictor(BasePredictor):
             token_probs=token_probs,
         )
 
-    # Make space for beacon tokens to be inserted while keeping the same seq len across all batch elements
-    # This involves **left padding** the input sequence. Although this is unconventional, it works better
-    # with the causal mask of flash attention, and we are careful to ignore this pad token when inserting
-    # into cache
+    # Always left pad with beacons, don't worry about attention masking
     def maybe_insert_beacon_tokens(
         self, input_ids: torch.Tensor, num_predicted_tokens: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -242,32 +243,14 @@ class FoundationPredictor(BasePredictor):
                 batch_size, dtype=torch.long, device=input_ids.device
             ) * seq_len
 
-        beacon_insert_pos = torch.zeros(
-            batch_size, dtype=torch.long, device=input_ids.device
-        )
-        for i in range(batch_size):
-            if needs_beacon[i]:
-                # Find first position that needs beacon
-                beacon_insert_pos[i] = torch.where(beacon_positions[i])[0]
-
         # Padded input ids.
         new_input_ids = torch.full(
             (batch_size, seq_len + 1),
-            self.device_pad_token,
+            self.device_beacon_token,
             dtype=input_ids.dtype,
             device=input_ids.device,
         )
-
-        # Fill in tokens for each sequence
-        for i in range(batch_size):
-            if needs_beacon[i]:
-                insert_pos = beacon_insert_pos[i]
-                new_input_ids[i, insert_pos] = self.device_beacon_token
-                if insert_pos > 0:
-                    new_input_ids[i, :insert_pos] = input_ids[i, :insert_pos]
-                new_input_ids[i, insert_pos + 1 :] = input_ids[i, insert_pos:]
-            else:
-                new_input_ids[i, 1:] = input_ids[i, :]
+        new_input_ids[:, 1:] = input_ids
 
         # Calculate valid token counts for both padded and non padded sequences
         valid_token_counts = torch.where(
@@ -283,6 +266,7 @@ class FoundationPredictor(BasePredictor):
         current_inputs: Optional[ContinuousBatchInput] = None,
         max_lookahead_tokens: Optional[int] = None,
     ):
+        start = time.time()
         # Note - If we want to use the outputs from the non-last token, we
         # need to set the cache position manually to ensure causality. The default
         # behavior only works for the last token currently
@@ -336,6 +320,7 @@ class FoundationPredictor(BasePredictor):
             num_predicted_tokens=num_predicted_tokens,
         )
 
+        print(f"Decode took {time.time() - start:.2f} seconds")
         return new_input, processed_output
 
     def pad_and_shift_input_ids_position_ids(
@@ -379,6 +364,8 @@ class FoundationPredictor(BasePredictor):
         max_lookahead_tokens: Optional[int] = None,
     ):
         logger.debug(f"Prefilling {self.num_empty_slots} slots")
+        start = time.time()
+
         prompts: List[FoundationPrompt] = [
             self.prompt_queue.popleft()
             for _ in range(min(self.num_empty_slots, len(self.prompt_queue)))
@@ -526,6 +513,7 @@ class FoundationPredictor(BasePredictor):
             num_predicted_tokens=current_num_predicted_tokens,
         )
 
+        print(f"Prefill took {time.time() - start:.2f} seconds")
         return new_input, processed_outputs, idxs_to_merge
 
     def get_max_image_token_count(
@@ -639,6 +627,7 @@ class FoundationPredictor(BasePredictor):
                 updated_inputs, outputs, merge_idxs = self.prefill(
                     current_inputs, max_lookahead_tokens=max_lookahead_tokens
                 )
+                mark_step()
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
@@ -684,6 +673,8 @@ class FoundationPredictor(BasePredictor):
                 updated_inputs, outputs = self.decode(
                     current_inputs, max_lookahead_tokens=max_lookahead_tokens
                 )
+                mark_step()
+
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 if top_k > 0:
@@ -741,7 +732,7 @@ class FoundationPredictor(BasePredictor):
 
             # Update inputs and mark XLA step
             current_inputs = updated_inputs
-            mark_step()
+
         pbar.close()
 
         del self.kv_cache
