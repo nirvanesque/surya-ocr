@@ -87,11 +87,6 @@ def is_flash_attn_2_supported(device: str | torch.device) -> bool:
 
 
 if settings.TORCH_DEVICE_MODEL == "xla":
-    import torch_xla.core.xla_model as xm
+    pass
 else:
     xm = None
-
-
-def mark_step():
-    if xm is not None:
-        xm.mark_step()

@@ -76,10 +76,11 @@ class Settings(BaseSettings):
     COMPILE_DETECTOR: bool = False
 
     # Text recognition
-    FOUNDATION_MODEL_CHECKPOINT: str = "s3://text_recognition/2025_08_04"
+    FOUNDATION_MODEL_CHECKPOINT: str = "datalab-to/foundation-alpha-nocce-fullatt"
     FOUNDATION_MODEL_QUANTIZE: bool = False
     FOUNDATION_MAX_TOKENS: Optional[int] = None
     FOUNDATION_CHUNK_SIZE: Optional[int] = None
+    FOUNDATION_PAD_TO_NEAREST: int = 256
     COMPILE_FOUNDATION: bool = False
 
     RECOGNITION_BATCH_SIZE: Optional[int] = (
