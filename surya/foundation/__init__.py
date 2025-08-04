@@ -69,6 +69,9 @@ class FoundationPredictor(BasePredictor):
     default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 64}
     encoder_chunk_size: int = 4096  # Default chunk size
     encoder_chunk_sizes = {"cpu": 4096, "mps": 4096, "cuda": 32768, "xla": 32768}
+    extra_token_count = {
+        "xla": 128
+    }  # We have to pad the XLA cache since we don't use sliding window
     min_prefill_ratio: int = 0.8 if settings.FOUNDATION_XLA else 0.2
     min_trim_length: int = 50
     tasks = {
@@ -599,7 +602,9 @@ class FoundationPredictor(BasePredictor):
             max_sliding_window = self.model.config.sliding_window
         self.setup_cache(
             batch_size,
-            max_cache_len=max_image_tokens + max_sliding_window + 200,
+            max_cache_len=max_image_tokens
+            + max_sliding_window
+            + self.extra_token_count.get(settings.TORCH_DEVICE_MODEL, 0),
             max_sliding_window=max_sliding_window,
         )
 

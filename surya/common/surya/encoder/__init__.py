@@ -221,8 +221,8 @@ class Qwen2_5_VLVisionFlashAttention2(nn.Module):
         q, k, v = (
             self.qkv(hidden_states)
             .reshape(bsz, seq_length, 3, self.num_heads, -1)
-            .permute(2, 0, 1, 3, 4)
-            .unbind(0)
+            .permute(0, 2, 1, 3, 4)
+            .unbind(1)
         )
         if position_embeddings is None:
             logger.warning_once(
@@ -244,7 +244,7 @@ class Qwen2_5_VLVisionFlashAttention2(nn.Module):
         v = v.squeeze(0)
         cu_seqlens = cu_seqlens.squeeze(0)
 
-        max_seqlen = (cu_seqlens[1:] - cu_seqlens[-1]).max().item()
+        max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
         attn_output = flash_attn_varlen_func(
             q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen
         ).reshape(bsz, seq_length, -1)
@@ -288,14 +288,12 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         rotary_pos_emb: Optional[torch.Tensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
-        hidden_states = hidden_states.squeeze(0)
-
-        seq_length = hidden_states.shape[0]
+        bsz, seq_length = hidden_states.shape[0], hidden_states.shape[1]
         q, k, v = (
             self.qkv(hidden_states)
-            .reshape(seq_length, 3, self.num_heads, -1)
-            .permute(1, 0, 2, 3)
-            .unbind(0)
+            .reshape(bsz, seq_length, 3, self.num_heads, -1)
+            .permute(0, 2, 1, 3, 4)
+            .unbind(1)
         )
         if position_embeddings is None:
             logger.warning_once(
@@ -309,36 +307,39 @@ class Qwen2_5_VLVisionAttention(nn.Module):
             sin = emb.sin()
         else:
             cos, sin = position_embeddings
-            cos = cos.squeeze(0)
-            sin = sin.squeeze(0)
+
         q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
 
         attention_mask = torch.full(
-            [1, seq_length, seq_length],
+            [bsz, 1, seq_length, seq_length],
             torch.finfo(q.dtype).min,
             device=q.device,
             dtype=q.dtype,
         )
-        for i in range(1, len(cu_seqlens)):
-            attention_mask[
-                ...,
-                cu_seqlens[i - 1] : cu_seqlens[i],
-                cu_seqlens[i - 1] : cu_seqlens[i],
-            ] = 0
+        for j in range(bsz):
+            batch_seqlens = cu_seqlens[j]
+            for i in range(1, len(batch_seqlens)):
+                attention_mask[
+                    j,
+                    ...,
+                    batch_seqlens[i - 1] : batch_seqlens[i],
+                    batch_seqlens[i - 1] : batch_seqlens[i],
+                ] = 0
 
-        q = q.transpose(0, 1)
-        k = k.transpose(0, 1)
-        v = v.transpose(0, 1)
-        attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(self.head_dim)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        attn_weights = torch.matmul(q, k.transpose(2, 3)) / math.sqrt(self.head_dim)
         attn_weights = attn_weights + attention_mask
         attn_weights = nn.functional.softmax(
             attn_weights, dim=-1, dtype=torch.float32
         ).to(q.dtype)
         attn_output = torch.matmul(attn_weights, v)
-        attn_output = attn_output.transpose(0, 1)
-        attn_output = attn_output.reshape(seq_length, -1)
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = attn_output.reshape(bsz, seq_length, -1)
         attn_output = self.proj(attn_output)
-        return attn_output.unsqueeze(0)
+        return attn_output
 
 
 class Qwen2_5_VLVisionSdpaAttention(nn.Module):
@@ -451,6 +452,8 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
         hidden_states = hidden_states.squeeze(0)
+        cu_seqlens = cu_seqlens.squeeze(0)
+
         seq_length = hidden_states.shape[0]
         q, k, v = (
             self.qkv(hidden_states)
@@ -471,6 +474,8 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         else:
             cos, sin = position_embeddings
         q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+        q = q.squeeze(0)
+        k = k.squeeze(0)
 
         q, k, v, attention_mask, batch_indices, position_indices = (
             self.unpack_qkv_with_mask(q, k, v, cu_seqlens)
