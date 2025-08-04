@@ -149,6 +149,12 @@ class Settings(BaseSettings):
         )
 
     @computed_field
+    def FOUNDATION_XLA(self) -> bool:
+        return (
+            self.TORCH_DEVICE_MODEL == "xla"
+        )  # We need to static cache and pad to batch size for XLA, since it will recompile otherwise
+
+    @computed_field
     def FOUNDATION_STATIC_CACHE(self) -> bool:
         return (
             self.COMPILE_ALL

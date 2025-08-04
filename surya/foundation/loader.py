@@ -5,7 +5,7 @@ from transformers.utils import is_flash_attn_2_available
 
 from surya.common.load import ModelLoader
 from surya.common.surya.config import SuryaModelConfig
-from surya.common.surya import SuryaModel
+from surya.common.surya import SuryaModel, SuryaXLAModel
 from surya.common.surya.processor import SuryaOCRProcessor
 from surya.common.surya.processor.tokenizer import SuryaOCRTokenizer
 from surya.common.util import is_flash_attn_2_supported
@@ -13,6 +13,7 @@ from surya.logging import get_logger
 from surya.settings import settings
 
 logger = get_logger()
+
 
 class FoundationModelLoader(ModelLoader):
     def __init__(self, checkpoint: Optional[str] = None):
@@ -42,11 +43,18 @@ class FoundationModelLoader(ModelLoader):
         if is_flash_attn_2_available() and is_flash_attn_2_supported(device):
             config.decoder._attn_implementation = "flash_attention_2"
             config.vision_encoder._attn_implementation = "flash_attention_2"
+        elif device == "xla":
+            config.decoder._attn_implementation = "sdpa"
+            config.vision_encoder._attn_implementation = "sdpa"
         else:
             config.decoder._attn_implementation = "sdpa"
             config.vision_encoder._attn_implementation = "sdpa"
 
-        model = SuryaModel.from_pretrained(
+        model_cls = SuryaModel
+        if device == "xla":
+            model_cls = SuryaXLAModel
+
+        model = model_cls.from_pretrained(
             self.checkpoint, torch_dtype=dtype, config=config
         ).to(device)
         model = model.eval()
@@ -74,7 +82,7 @@ class FoundationModelLoader(ModelLoader):
             merge_size=config.vision_encoder.spatial_merge_size,
             model_device=device,
             num_beacon_tokens=config.num_beacon_tokens,
-            beacon_token_interval=config.beacon_token_interval
+            beacon_token_interval=config.beacon_token_interval,
         )
 
         return processor

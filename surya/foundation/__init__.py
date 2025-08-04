@@ -69,7 +69,7 @@ class FoundationPredictor(BasePredictor):
     default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 64}
     encoder_chunk_size: int = 4096  # Default chunk size
     encoder_chunk_sizes = {"cpu": 4096, "mps": 4096, "cuda": 32768, "xla": 32768}
-    min_prefill_ratio: int = 0.2
+    min_prefill_ratio: int = 0.8 if settings.FOUNDATION_XLA else 0.2
     min_trim_length: int = 50
     tasks = {
         TaskNames.ocr_with_boxes: {
@@ -131,9 +131,7 @@ class FoundationPredictor(BasePredictor):
         return chunk_size
 
     def setup_cache(self, batch_size: int, max_cache_len: int, max_sliding_window: int):
-        kv_cache_cls = (
-            StaticOpsCache if settings.TORCH_DEVICE == "xla" else DynamicOpsCache
-        )
+        kv_cache_cls = StaticOpsCache if settings.FOUNDATION_XLA else DynamicOpsCache
         self.kv_cache = kv_cache_cls(
             self.model.config,
             batch_size,
@@ -266,7 +264,6 @@ class FoundationPredictor(BasePredictor):
         current_inputs: Optional[ContinuousBatchInput] = None,
         max_lookahead_tokens: Optional[int] = None,
     ):
-        start = time.time()
         # Note - If we want to use the outputs from the non-last token, we
         # need to set the cache position manually to ensure causality. The default
         # behavior only works for the last token currently
@@ -320,7 +317,6 @@ class FoundationPredictor(BasePredictor):
             num_predicted_tokens=num_predicted_tokens,
         )
 
-        print(f"Decode took {time.time() - start:.2f} seconds")
         return new_input, processed_output
 
     def pad_and_shift_input_ids_position_ids(
@@ -388,14 +384,22 @@ class FoundationPredictor(BasePredictor):
             padding_side="left",
             device=self.model.device,
             pad_to_multiple=self.pad_to_multiple,
-        ).to(device=self.model.device)
+        )
 
-        input_ids = processed_inputs["input_ids"].to(dtype=torch.long)
+        input_ids = processed_inputs["input_ids"].to(
+            dtype=torch.long, device=self.model.device
+        )
+        attention_mask = processed_inputs["attention_mask"].to(
+            dtype=torch.long, device=self.model.device
+        )
+        position_ids = processed_inputs["position_ids"].to(
+            dtype=torch.long, device=self.model.device
+        )
+        valid_batch_size = len(idxs_to_merge)
+
+        # Keep these off device until later
         image_tiles = processed_inputs["image_tiles"].to(dtype=self.model.dtype)
         grid_thw = processed_inputs["grid_thw"].to(dtype=torch.long)
-        attention_mask = processed_inputs["attention_mask"].to(dtype=torch.long)
-        position_ids = processed_inputs["position_ids"].to(dtype=torch.long)
-        valid_batch_size = len(idxs_to_merge)
 
         if settings.FOUNDATION_STATIC_CACHE:
             input_ids = self.pad_to_batch_size(
@@ -409,24 +413,27 @@ class FoundationPredictor(BasePredictor):
             )
 
         # Find text lengths of each
-        is_special = (input_ids.unsqueeze(-1) == self.special_token_ids).any(
-            -1
-        )  # (batch, seq_len)
-        text_lengths = []
-        for i in range(input_ids.shape[0]):
-            special_positions = is_special[i].nonzero(as_tuple=True)[0]
-            if len(special_positions) > 0:
-                # Assuming special tokens are contiguous at the start
-                prefix_len = special_positions[-1].item() + 1
-            else:
-                prefix_len = 0
-            text_lengths.append(input_ids.shape[1] - prefix_len)
+        is_special = (
+            input_ids.unsqueeze(-1).eq(self.special_token_ids).any(-1)
+        )  # (B, L) bool
+
+        idx = (
+            torch.arange(input_ids.size(1), device=input_ids.device, dtype=torch.long)
+            + 1
+        )  # 1…L
+        last_special_plus1 = (is_special * idx).max(dim=1).values  # (B,) 0 if none
+
+        text_lengths = (input_ids.size(1) - last_special_plus1).to(
+            dtype=torch.long
+        )  # (B,)
 
         with settings.INFERENCE_MODE():
             image_embeddings = self.model.get_image_embeddings(
                 pixel_values=image_tiles,
                 grid_thw=grid_thw,
+                encoder_chunk_size=self.encoder_chunk_size,
                 valid_batch_size=valid_batch_size,
+                max_batch_size=self.kv_cache.max_batch_size,
             )
 
             outputs = self.model(
@@ -592,7 +599,7 @@ class FoundationPredictor(BasePredictor):
             max_sliding_window = self.model.config.sliding_window
         self.setup_cache(
             batch_size,
-            max_cache_len=max_image_tokens + max_sliding_window,
+            max_cache_len=max_image_tokens + max_sliding_window + 200,
             max_sliding_window=max_sliding_window,
         )
 
