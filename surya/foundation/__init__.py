@@ -431,6 +431,8 @@ class FoundationPredictor(BasePredictor):
         )  # (B,)
 
         with settings.INFERENCE_MODE():
+            mark_step()
+            start = time.time()
             image_embeddings = self.model.get_image_embeddings(
                 pixel_values=image_tiles,
                 grid_thw=grid_thw,
@@ -438,6 +440,8 @@ class FoundationPredictor(BasePredictor):
                 valid_batch_size=valid_batch_size,
                 max_batch_size=self.kv_cache.max_batch_size,
             )
+            mark_step()
+            print(f"Image embeddings took {time.time() - start:.2f} seconds")
 
             outputs = self.model(
                 input_ids=input_ids,
@@ -452,7 +456,10 @@ class FoundationPredictor(BasePredictor):
                 prefill=True,
                 num_valid_tokens=None,  # Not required during prefill
                 text_lengths=text_lengths,
+                valid_batch_size=valid_batch_size,
             )
+            mark_step()
+            print(f"Prefill model forward took {time.time() - start:.2f} seconds")
 
         # Process outputs
         processed_outputs = self.process_outputs(
@@ -523,7 +530,6 @@ class FoundationPredictor(BasePredictor):
             num_predicted_tokens=current_num_predicted_tokens,
         )
 
-        print(f"Prefill took {time.time() - start:.2f} seconds")
         return new_input, processed_outputs, idxs_to_merge
 
     def get_max_image_token_count(
@@ -643,6 +649,8 @@ class FoundationPredictor(BasePredictor):
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
+                bbox_preds_cpu = outputs.bbox_preds.cpu()
+
                 if top_k > 0:
                     batch_top_k_probs, batch_top_k_indices = torch.topk(
                         outputs.token_probs, k=top_k, dim=-1
@@ -657,7 +665,7 @@ class FoundationPredictor(BasePredictor):
                         for t_idx in range(seq_len):
                             token = predicted_tokens_cpu[temp_idx, t_idx].item()
                             predicted_tokens[p_idx].append(token)
-                            batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
+                            batch_bboxes[p_idx, batch_pos[p_idx]] = bbox_preds_cpu[
                                 temp_idx, t_idx
                             ]
                             batch_pos[p_idx] += 1
@@ -689,6 +697,8 @@ class FoundationPredictor(BasePredictor):
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
+                bbox_preds_cpu = outputs.bbox_preds.cpu()
+
                 if top_k > 0:
                     batch_top_k_probs, batch_top_k_indices = torch.topk(
                         outputs.token_probs, k=top_k, dim=-1
@@ -704,7 +714,7 @@ class FoundationPredictor(BasePredictor):
                         for t_idx in range(seq_len):
                             token = predicted_tokens_cpu[b_idx, t_idx].item()
                             predicted_tokens[p_idx].append(token)
-                            batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
+                            batch_bboxes[p_idx, batch_pos[p_idx]] = bbox_preds_cpu[
                                 b_idx, t_idx
                             ]
                             batch_pos[p_idx] += 1

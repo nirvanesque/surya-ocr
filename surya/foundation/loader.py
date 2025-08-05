@@ -54,6 +54,10 @@ class FoundationModelLoader(ModelLoader):
         if device == "xla":
             model_cls = SuryaXLAModel
 
+        config._attn_implementation_autoset = True
+        config.vision_encoder._attn_implementation_autoset = True
+        config.decoder._attn_implementation_autoset = True
+
         model = model_cls.from_pretrained(
             self.checkpoint, torch_dtype=dtype, config=config
         ).to(device)

@@ -1,3 +1,4 @@
+import time
 import warnings
 from typing import Optional, Tuple, TypedDict
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from surya.common.surya.decoder import SuryaDecoderModel
 from surya.common.surya.embedder import SimpleTokenEmbedder
 from surya.common.surya.encoder import SuryaEncoderModel
 from surya.common.util import pad_to_batch_size, pad_to_batch_size_repeat
-from surya.common.xla import get_nearest_pad
+from surya.common.xla import get_nearest_pad, mark_step
 from surya.settings import settings
 
 from transformers.utils import is_flash_attn_2_available
@@ -397,12 +398,17 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     ):
         # Process the mixed batch if provided
         if inputs_embeds is None:
+            mark_step()
+            start = time.time()
             inputs_embeds = self.embed_ids_boxes_images(
                 input_ids,
                 image_embeddings,
                 encoder_chunk_size,
                 valid_batch_size,
             )
+            mark_step()
+            if image_embeddings is not None:
+                print(f"Embedder time: {time.time() - start}")
 
         # Handling flash attention kwargs outside the decoder to speed up + avoid graph breaks inside the decoder
         # Skipped during decoding since not required
@@ -605,12 +611,13 @@ class SuryaXLAModel(SuryaModel):
     ):
         # embed all images with the vision encoder after they have already been tiled and flattened into a single batch
         unpadded_max_grid_size = (
-            grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]
-        ).max()
+            (grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]).max().item()
+        )
         max_grid_size = get_nearest_pad(
             unpadded_max_grid_size,
         )  # If we need zero padding, we still need to allocate a bit of room for the extra grid_thw
 
+        # Always need 2 items in each row batch
         if max_grid_size == unpadded_max_grid_size:
             max_grid_size += 16
 
@@ -650,7 +657,6 @@ class SuryaXLAModel(SuryaModel):
         # bsz, 2, 3
         row_grids = torch.stack(row_grids, dim=0)
 
-        unpadded_size = full_image_grid.shape[0]
         if settings.FOUNDATION_STATIC_CACHE:
             # Pad to max batch size, repeat the final row
             row_grids = pad_to_batch_size_repeat(
@@ -662,10 +668,10 @@ class SuryaXLAModel(SuryaModel):
                 batch_size=max_batch_size,
             )
 
-        row_grids = row_grids.to(self.device)
         full_image_grid = full_image_grid.to(self.device)
+
         embeddings = self.vision_encoder.embed_images(
-            image_batch=full_image_grid, grid_thw=row_grids
+            image_batch=full_image_grid, grid_thw=row_grids.to(self.device)
         )
 
         encoding_2d = self.get_2d_learned_embeddings(
@@ -673,8 +679,6 @@ class SuryaXLAModel(SuryaModel):
             bbox_size=self.config.image_embed_encoding_multiplier,
         )
         embeddings += encoding_2d
-        embeddings = embeddings[:unpadded_size]
-
         return embeddings
 
     def embed_ids_boxes_images(
@@ -709,25 +713,26 @@ class SuryaXLAModel(SuryaModel):
             )
             # Calculate start position to replace N positions ending at (and including) the last image token
             start_positions = last_image_token_pos - image_embeddings[0].shape[0]
-
             batch_size, insert_len = image_embeddings.shape[:2]
-            batch_indices = torch.arange(
-                batch_size, device=inputs_embeds.device
-            ).unsqueeze(1)
 
             # Create position indices for each insertion
             pos_indices = torch.arange(
                 insert_len, device=inputs_embeds.device
             ).unsqueeze(0)
-            insert_positions = start_positions.unsqueeze(1) + pos_indices
+            insert_positions = start_positions + pos_indices
 
-            inputs_embeds[batch_indices, insert_positions] = image_embeddings
+            idx = insert_positions.unsqueeze(-1).expand(
+                -1, -1, inputs_embeds.size(-1)
+            )  # [B,N,D]
+            inputs_embeds = inputs_embeds.scatter(1, idx, image_embeddings)
         else:
             assert (input_ids == self.config.image_token_id).sum() == 0, (
                 "Image tokens were present in the input but no input images were provided"
             )
 
-        inputs_embeds[input_ids == self.config.pad_token_id] = 0
+        inputs_embeds = inputs_embeds * (
+            input_ids != self.config.pad_token_id
+        ).unsqueeze(-1).to(inputs_embeds.dtype)
         return inputs_embeds
 
     def get_2d_learned_embeddings(
@@ -764,8 +769,8 @@ class SuryaXLAModel(SuryaModel):
             )  # (full_grid_size,)
             all_row_coords.append(row_coords)
             all_col_coords.append(col_coords)
-        row_coords = torch.stack(all_row_coords, dim=0)
-        col_coords = torch.stack(all_col_coords, dim=0)
+        row_coords = torch.stack(all_row_coords, dim=0).to(self.device)
+        col_coords = torch.stack(all_col_coords, dim=0).to(self.device)
 
         emb = self.img_h_embed(row_coords.long()) + self.img_w_embed(col_coords.long())
         return emb

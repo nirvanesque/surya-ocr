@@ -17,6 +17,9 @@ if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_func
     from flash_attn.layers.rotary import apply_rotary_emb  # noqa
 
+if settings.FOUNDATION_XLA:
+    import torch_xla.experimental.custom_kernel
+
 
 logger = get_logger()
 
@@ -79,13 +82,12 @@ class Qwen2_5_VisionPatchEmbed(nn.Module):
 class Qwen2_5_VisionRotaryEmbedding(nn.Module):
     def __init__(self, dim: int, theta: float = 10000.0) -> None:
         super().__init__()
-        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.inv_freq = 1.0 / (
+            theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim)
+        )
 
     def forward(self, seqlen: int) -> torch.Tensor:
-        seq = torch.arange(
-            seqlen, device=self.inv_freq.device, dtype=self.inv_freq.dtype
-        )
+        seq = torch.arange(seqlen, device="cpu", dtype=self.inv_freq.dtype)
         freqs = torch.outer(seq, self.inv_freq)
         return freqs
 
@@ -173,11 +175,10 @@ class Qwen2_5_VLVisionXLASdpaAttention(nn.Module):
             cos, sin = position_embeddings
         q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
 
-        attention_mask = torch.zeros(
-            [bsz, 1, seq_length, seq_length], device=q.device, dtype=torch.bool
-        )
+        attention_mask = torch.zeros([bsz, 1, seq_length, seq_length], dtype=torch.bool)
+        cu_seqlens_cpu = cu_seqlens.cpu()
         for j in range(bsz):
-            batch_seqlens = cu_seqlens[j]
+            batch_seqlens = cu_seqlens_cpu[j]
             for i in range(1, len(batch_seqlens)):
                 attention_mask[
                     j,
@@ -185,6 +186,9 @@ class Qwen2_5_VLVisionXLASdpaAttention(nn.Module):
                     batch_seqlens[i - 1] : batch_seqlens[i],
                     batch_seqlens[i - 1] : batch_seqlens[i],
                 ] = True
+
+        attention_mask = attention_mask.to(q.device)
+
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
@@ -198,6 +202,66 @@ class Qwen2_5_VLVisionXLASdpaAttention(nn.Module):
         )
         attn_output = attn_output.transpose(1, 2)
         attn_output = attn_output.reshape(bsz, seq_length, -1)
+        attn_output = self.proj(attn_output)
+        return attn_output
+
+
+class Qwen2_5_VLVisionXLAFlashAttention2(nn.Module):
+    def __init__(self, dim: int, num_heads: int = 16) -> None:
+        super().__init__()
+        self.num_heads = num_heads
+        self.qkv = nn.Linear(dim, dim * 3, bias=True)
+        self.proj = nn.Linear(dim, dim)
+        self.head_dim = dim // num_heads
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rotary_pos_emb: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        # Note, this is faster than SDPA, but pretty memory inefficient
+        # It also has significant accuracy issues
+
+        bsz, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+
+        # Single reshape to target layout - avoid multiple operations
+        q, k, v = (
+            self.qkv(hidden_states)
+            .reshape(bsz, seq_length, 3, self.num_heads, -1)
+            .permute(0, 2, 1, 3, 4)
+            .unbind(1)
+        )
+
+        # Apply rotary embeddings if provided
+        if position_embeddings is not None:
+            cos, sin = position_embeddings
+            q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+        # Single reshape to flash attention format [batch, num_heads, seq_len, head_dim]
+        q = q.transpose(1, 2)  # [bsz, num_heads, seq_len, head_dim]
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        total_seqlen = q.shape[2]
+        # from cu_seqlens to segment ids for each position in dim 0
+        additive_bias = torch.zeros((bsz, 1, total_seqlen, total_seqlen), dtype=q.dtype)
+        min_val = torch.finfo(q.dtype).min
+
+        for i in range(bsz):
+            padding_end = cu_seqlens[i][1].item()
+            additive_bias[i, :, :, :padding_end] = min_val
+
+        additive_bias = additive_bias.to(hidden_states.device)
+
+        attn_scale = 1 / math.sqrt(self.head_dim)
+        attn_output = torch_xla.experimental.custom_kernel.flash_attention(
+            q, k, v, sm_scale=attn_scale, ab=additive_bias
+        )
+        attn_output = (
+            attn_output.transpose(1, 2).contiguous().reshape(bsz, seq_length, -1)
+        )
         attn_output = self.proj(attn_output)
         return attn_output
 
@@ -503,7 +567,9 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
 
 QWEN2_5_VL_VISION_ATTENTION_CLASSES = {
     "eager": Qwen2_5_VLVisionAttention,
-    "flash_attention_2": Qwen2_5_VLVisionFlashAttention2,
+    "flash_attention_2": Qwen2_5_VLVisionXLAFlashAttention2
+    if settings.FOUNDATION_XLA
+    else Qwen2_5_VLVisionFlashAttention2,
     "sdpa": Qwen2_5_VLVisionXLASdpaAttention
     if settings.FOUNDATION_XLA
     else Qwen2_5_VLVisionSdpaAttention,
@@ -614,7 +680,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
 
     def rot_pos_emb(self, grid_thw):
         rotary_pos_emb = []
-        grid_thw_list = grid_thw.tolist()
+        grid_thw_list = grid_thw.cpu().tolist()
         for batch_item in grid_thw_list:
             row_pos_ids = []
             heights = [h for _, h, _ in batch_item]
@@ -652,9 +718,6 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         rotary_pos_emb = torch.stack(rotary_pos_emb, dim=0)
         return rotary_pos_emb
 
-    def get_padding_window_index(self, row_grid_thw):
-        pass
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -676,7 +739,9 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
 
         # hidden_states = hidden_states.reshape(bsz, seq_len, -1)
         # rotary_pos_emb = rotary_pos_emb.reshape(bsz, seq_len, -1)
-        emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+        emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1).to(
+            hidden_states.device
+        )
         position_embeddings = (emb.cos(), emb.sin())
 
         cu_seqlens = (grid_thw[:, :, 1] * grid_thw[:, :, 2]).cumsum(
