@@ -14,7 +14,7 @@ def get_nearest_pad(
 
 
 def get_compile_args(device: str) -> dict:
-    if device != "xla":
+    if not settings.FOUNDATION_XLA:
         return {}
 
     return {

@@ -9,6 +9,7 @@ from surya.common.surya import SuryaModel, SuryaXLAModel
 from surya.common.surya.processor import SuryaOCRProcessor
 from surya.common.surya.processor.tokenizer import SuryaOCRTokenizer
 from surya.common.util import is_flash_attn_2_supported
+from surya.common.xla import get_compile_args
 from surya.logging import get_logger
 from surya.settings import settings
 
@@ -62,6 +63,21 @@ class FoundationModelLoader(ModelLoader):
             self.checkpoint, torch_dtype=dtype, config=config
         ).to(device)
         model = model.eval()
+
+        if settings.COMPILE_ALL or settings.COMPILE_FOUNDATION:
+            torch._dynamo.config.cache_size_limit = 1000
+            torch._dynamo.config.suppress_errors = True
+            torch._dynamo.config.specialize_int = False
+            torch._dynamo.config.allow_unspec_int_on_nn_module = True
+            torch._dynamo.config.capture_scalar_outputs = True
+            torch._dynamo.config.recompile_limit = 32
+
+            logger.info(
+                f"Compiling foundation model {self.checkpoint} on device {device} with dtype {dtype}"
+            )
+            compile_args = get_compile_args(device)
+            model.vision_encoder = torch.compile(model.vision_encoder, **compile_args)
+            model.decoder = torch.compile(model.decoder, **compile_args)
 
         logger.debug(
             f"Loaded recognition model {self.checkpoint} from {SuryaModel.get_local_path(self.checkpoint)} onto device {model.device} with dtype {dtype}, using decoder attention mechanism {model.config.decoder._attn_implementation}, encoder attention mechanism {model.config.vision_encoder._attn_implementation}."
