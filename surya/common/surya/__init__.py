@@ -1,4 +1,3 @@
-import time
 import warnings
 from typing import Optional, Tuple, TypedDict
 from dataclasses import dataclass
@@ -17,7 +16,7 @@ from surya.common.surya.decoder import SuryaDecoderModel
 from surya.common.surya.embedder import SimpleTokenEmbedder
 from surya.common.surya.encoder import SuryaEncoderModel
 from surya.common.util import pad_to_batch_size, pad_to_batch_size_repeat
-from surya.common.xla import get_nearest_pad, mark_step
+from surya.common.xla import get_nearest_pad
 from surya.settings import settings
 
 from transformers.utils import is_flash_attn_2_available
@@ -398,17 +397,12 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     ):
         # Process the mixed batch if provided
         if inputs_embeds is None:
-            mark_step()
-            start = time.time()
             inputs_embeds = self.embed_ids_boxes_images(
                 input_ids,
                 image_embeddings,
                 encoder_chunk_size,
                 valid_batch_size,
             )
-            mark_step()
-            if image_embeddings is not None:
-                print(f"Embedder time: {time.time() - start}")
 
         # Handling flash attention kwargs outside the decoder to speed up + avoid graph breaks inside the decoder
         # Skipped during decoding since not required
@@ -702,9 +696,6 @@ class SuryaXLAModel(SuryaModel):
                 device=inputs_embeds.device,
                 dtype=torch.long,
             )
-            logger.debug(
-                f"Inserting image embeddings at token id {self.config.image_token_id}"
-            )
             mask = input_ids == image_token_id_tensor
             last_image_token_pos = (
                 mask.size(1)
@@ -725,10 +716,6 @@ class SuryaXLAModel(SuryaModel):
                 -1, -1, inputs_embeds.size(-1)
             )  # [B,N,D]
             inputs_embeds = inputs_embeds.scatter(1, idx, image_embeddings)
-        else:
-            assert (input_ids == self.config.image_token_id).sum() == 0, (
-                "Image tokens were present in the input but no input images were provided"
-            )
 
         inputs_embeds = inputs_embeds * (
             input_ids != self.config.pad_token_id

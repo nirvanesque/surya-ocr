@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from collections import deque
@@ -363,7 +362,6 @@ class FoundationPredictor(BasePredictor):
         max_lookahead_tokens: Optional[int] = None,
     ):
         logger.debug(f"Prefilling {self.num_empty_slots} slots")
-        start = time.time()
 
         prompts: List[FoundationPrompt] = [
             self.prompt_queue.popleft()
@@ -431,8 +429,6 @@ class FoundationPredictor(BasePredictor):
         )  # (B,)
 
         with settings.INFERENCE_MODE():
-            mark_step()
-            start = time.time()
             image_embeddings = self.model.get_image_embeddings(
                 pixel_values=image_tiles,
                 grid_thw=grid_thw,
@@ -441,7 +437,6 @@ class FoundationPredictor(BasePredictor):
                 max_batch_size=self.kv_cache.max_batch_size,
             )
             mark_step()
-            print(f"Image embeddings took {time.time() - start:.2f} seconds")
 
             outputs = self.model(
                 input_ids=input_ids,
@@ -458,8 +453,6 @@ class FoundationPredictor(BasePredictor):
                 text_lengths=text_lengths,
                 valid_batch_size=valid_batch_size,
             )
-            mark_step()
-            print(f"Prefill model forward took {time.time() - start:.2f} seconds")
 
         # Process outputs
         processed_outputs = self.process_outputs(
