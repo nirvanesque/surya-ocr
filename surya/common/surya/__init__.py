@@ -278,6 +278,8 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         image_embeddings,
         encoder_chunk_size: int,
         valid_batch_size: torch.Tensor | None = None,
+        input_boxes: torch.Tensor | None = None,
+        embed_boxes: torch.Tensor | None = None,
     ):
         """
         Insert embedded image tiles into the corresponding positions into the full input sequence
@@ -285,7 +287,9 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         Positions to insert new tokens are indicated by the special image token index
         """
         # This is batched in the inner call
-        inputs_embeds = self.embedder.embed(input_tokens=input_ids)
+        inputs_embeds = self.embedder.embed(
+            input_tokens=input_ids, input_boxes=input_boxes, embed_boxes=embed_boxes
+        )
 
         if image_embeddings is not None:
             special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
@@ -393,6 +397,8 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         prefill=False,
         text_lengths=None,
         valid_batch_size: torch.Tensor = None,
+        input_boxes=None,
+        embed_boxes=None,
         **kwargs: KwargsForCausalLM,
     ):
         # Process the mixed batch if provided
@@ -402,6 +408,8 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 image_embeddings,
                 encoder_chunk_size,
                 valid_batch_size,
+                input_boxes,
+                embed_boxes,
             )
 
         # Handling flash attention kwargs outside the decoder to speed up + avoid graph breaks inside the decoder
@@ -681,6 +689,8 @@ class SuryaXLAModel(SuryaModel):
         image_embeddings,
         encoder_chunk_size: int,
         valid_batch_size: torch.Tensor | None = None,
+        input_boxes: torch.Tensor | None = None,
+        embed_boxes: torch.Tensor | None = None,
     ):
         """
         Insert embedded image tiles into the corresponding positions into the full input sequence
@@ -688,7 +698,9 @@ class SuryaXLAModel(SuryaModel):
         Positions to insert new tokens are indicated by the special image token index
         """
         # This is batched in the inner call
-        inputs_embeds = self.embedder.embed(input_tokens=input_ids)
+        inputs_embeds = self.embedder.embed(
+            input_tokens=input_ids, input_boxes=input_boxes, embed_boxes=embed_boxes
+        )
 
         if image_embeddings is not None:
             image_token_id_tensor = torch.tensor(

@@ -34,11 +34,13 @@ logger = get_logger()
 @dataclass
 class ContinuousBatchInput:
     input_ids: torch.Tensor
+    input_boxes: torch.Tensor
     position_ids: torch.Tensor
     # input_ids and position_ids may be padded, num_valid_tokens tracks the 'real' counts
     num_valid_tokens: torch.Tensor
     # count the number of predicted tokens for each batch element so far
     num_predicted_tokens: torch.Tensor
+    needs_bbox_embedding: torch.Tensor
 
 
 @dataclass
@@ -274,6 +276,9 @@ class FoundationPredictor(BasePredictor):
         # need to set the cache position manually to ensure causality. The default
         # behavior only works for the last token currently
         input_ids = current_inputs.input_ids
+        input_boxes = current_inputs.input_boxes
+        embed_boxes = current_inputs.needs_bbox_embedding
+
         position_ids = current_inputs.position_ids
         num_predicted_tokens = current_inputs.num_predicted_tokens
         num_valid_tokens = current_inputs.num_valid_tokens
@@ -293,6 +298,8 @@ class FoundationPredictor(BasePredictor):
                 past_key_values=self.kv_cache,
                 prefill=False,
                 num_valid_tokens=num_valid_tokens,
+                input_boxes=input_boxes,
+                embed_boxes=embed_boxes,
             )
 
         processed_output: ContinuousBatchOutput = self.process_outputs(
@@ -300,6 +307,7 @@ class FoundationPredictor(BasePredictor):
         )
 
         input_ids = processed_output.input_ids
+        input_boxes = processed_output.bbox_preds
 
         # Update this **before** inserting beacon tokens
         num_new_tokens = input_ids.shape[1]
@@ -318,9 +326,11 @@ class FoundationPredictor(BasePredictor):
 
         new_input = ContinuousBatchInput(
             input_ids=input_ids,
+            input_boxes=input_boxes,
             position_ids=position_ids,
             num_valid_tokens=num_valid_tokens,
             num_predicted_tokens=num_predicted_tokens,
+            needs_bbox_embedding=current_inputs.needs_bbox_embedding,
         )
 
         return new_input, processed_output
@@ -328,9 +338,10 @@ class FoundationPredictor(BasePredictor):
     def pad_and_shift_input_ids_position_ids(
         self,
         input_ids: torch.Tensor,
+        bbox_preds: torch.Tensor,
         position_ids: torch.Tensor,
         new_seq_len: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Pads new_input_ids to match the new seq len with **left padding**
         and creates updated position_ids
@@ -341,13 +352,20 @@ class FoundationPredictor(BasePredictor):
         """
         # No padding
         if new_seq_len == input_ids.shape[1]:
-            return input_ids, position_ids[:, -1:] + torch.arange(
-                1, new_seq_len + 1, device=self.model.device
+            return (
+                input_ids,
+                bbox_preds,
+                position_ids[:, -1:]
+                + torch.arange(1, new_seq_len + 1, device=self.model.device),
             )
 
         pad_len = new_seq_len - input_ids.shape[1]
         padded_input_ids = torch.nn.functional.pad(
             input_ids, (pad_len, 0), value=self.device_pad_token
+        )
+
+        padded_bbox_preds = torch.nn.functional.pad(
+            bbox_preds, (pad_len, 0, 0, 0), value=-100
         )
 
         # Since we have **left padding**, offset the new position_ids by the amount of padding
@@ -358,7 +376,7 @@ class FoundationPredictor(BasePredictor):
         )
         updated_position_ids -= pad_len
 
-        return padded_input_ids, updated_position_ids
+        return padded_input_ids, padded_bbox_preds, updated_position_ids
 
     def prefill(
         self,
@@ -376,6 +394,14 @@ class FoundationPredictor(BasePredictor):
         for i, prompt in zip(idxs_to_merge, prompts):
             self.batch_prompt_mapping[i] = prompt.id
 
+        needs_bbox_embedding = torch.tensor(
+            [
+                p.task_name in [TaskNames.layout, TaskNames.table_recognition]
+                for p in prompts
+            ],
+            device=self.model.device,
+            dtype=torch.bool,
+        )
         batch_input = self.prepare_input(
             task_names=[p.task_name for p in prompts],
             images=[p.image for p in prompts],
@@ -488,9 +514,11 @@ class FoundationPredictor(BasePredictor):
             )
             new_input = ContinuousBatchInput(
                 input_ids=processed_outputs.input_ids,
+                input_boxes=processed_outputs.bbox_preds,
                 position_ids=position_ids,
                 num_valid_tokens=num_valid_tokens,
                 num_predicted_tokens=num_predicted_tokens,
+                needs_bbox_embedding=needs_bbox_embedding,
             )
 
             return (
@@ -502,14 +530,18 @@ class FoundationPredictor(BasePredictor):
         # Merging inputs for next steps
         current_input_ids = current_inputs.input_ids
         current_position_ids = current_inputs.position_ids
+        current_input_boxes = current_inputs.input_boxes
+        current_needs_bbox_embedding = current_inputs.needs_bbox_embedding
 
         assert current_input_ids.shape[1] == current_position_ids.shape[1]
-        input_ids, position_ids = self.pad_and_shift_input_ids_position_ids(
+        input_ids, bbox_preds, position_ids = self.pad_and_shift_input_ids_position_ids(
             processed_outputs.input_ids,
+            processed_outputs.bbox_preds,
             position_ids,
             new_seq_len=current_input_ids.shape[1],
         )
         current_input_ids[idxs_to_merge] = input_ids[:valid_batch_size]
+        current_input_boxes[idxs_to_merge] = bbox_preds[:valid_batch_size]
         current_position_ids[idxs_to_merge] = position_ids[:valid_batch_size]
 
         current_num_valid_tokens = current_inputs.num_valid_tokens
@@ -520,11 +552,17 @@ class FoundationPredictor(BasePredictor):
             :valid_batch_size
         ]
 
+        current_needs_bbox_embedding[idxs_to_merge] = needs_bbox_embedding[
+            :valid_batch_size
+        ]
+
         new_input = ContinuousBatchInput(
             input_ids=current_input_ids,
+            input_boxes=current_input_boxes,
             position_ids=current_position_ids,
             num_valid_tokens=current_num_valid_tokens,
             num_predicted_tokens=current_num_predicted_tokens,
+            needs_bbox_embedding=current_needs_bbox_embedding,
         )
 
         return new_input, processed_outputs, idxs_to_merge
