@@ -20,24 +20,24 @@ class SimpleTokenEmbedder(nn.Module):
     def embed(
         self,
         input_tokens: torch.Tensor,
-        input_bboxes: torch.Tensor | None,
-        embed_bboxes: torch.Tensor,
+        input_boxes: torch.Tensor | None,
+        embed_boxes: torch.Tensor,
     ) -> torch.Tensor:
         # Embed tokens
         token_embeds = self.token_embed(input_tokens)
 
         # Optionally embed boxes
-        if input_bboxes is not None:  # Is none in prefill
-            input_bboxes = input_bboxes.to(torch.long)
-            bbox_loss_ignore_mask = (input_bboxes[:, :, 0] < 0).unsqueeze(-1)
-            input_bboxes = torch.where(
-                input_bboxes > 0, input_bboxes, torch.zeros_like(input_bboxes)
+        if input_boxes is not None:  # Is none in prefill
+            input_boxes = input_boxes.to(torch.long)
+            bbox_loss_ignore_mask = (input_boxes[:, :, 0] < 0).unsqueeze(-1)
+            input_boxes = torch.where(
+                input_boxes > 0, input_boxes, torch.zeros_like(input_boxes)
             )
 
             bbox_embeds = torch.sum(
                 torch.stack(
                     [
-                        self.bbox_embed[i](input_bboxes[:, :, i])
+                        self.bbox_embed[i](input_boxes[:, :, i])
                         for i in range(len(self.bbox_embed))
                     ],
                     dim=-1,
@@ -48,11 +48,11 @@ class SimpleTokenEmbedder(nn.Module):
             bbox_embeds = F.pad(
                 bbox_embeds, (token_embeds.shape[-1] - bbox_embeds.shape[-1], 0)
             )
-            embed_bboxes = embed_bboxes.unsqueeze(1).unsqueeze(1).expand_as(bbox_embeds)
+            embed_boxes = embed_boxes.unsqueeze(1).unsqueeze(1).expand_as(bbox_embeds)
             bbox_loss_ignore_mask = bbox_loss_ignore_mask.expand_as(bbox_embeds)
 
             zero_boxes = torch.zeros_like(token_embeds)
-            bbox_embeds = torch.where(embed_bboxes, bbox_embeds, zero_boxes)
+            bbox_embeds = torch.where(embed_boxes, bbox_embeds, zero_boxes)
             bbox_embeds = torch.where(bbox_loss_ignore_mask, zero_boxes, bbox_embeds)
 
             token_embeds = token_embeds + bbox_embeds
