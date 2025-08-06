@@ -9,15 +9,16 @@ from surya.settings import settings
 class BasePredictor:
     model_loader_cls = ModelLoader
     batch_size: Optional[int] = None
-    default_batch_sizes = {
-        "cpu": 1,
-        "mps": 1,
-        "cuda": 1
-    }
+    default_batch_sizes = {"cpu": 1, "mps": 1, "cuda": 1}
     disable_tqdm: bool = settings.DISABLE_TQDM
     torch_dtype = settings.MODEL_DTYPE
 
-    def __init__(self, checkpoint: Optional[str] = None, device: torch.device | str | None = settings.TORCH_DEVICE_MODEL, dtype: Optional[torch.dtype | str] = None):
+    def __init__(
+        self,
+        checkpoint: Optional[str] = None,
+        device: torch.device | str | None = settings.TORCH_DEVICE_MODEL,
+        dtype: Optional[torch.dtype | str] = None,
+    ):
         if dtype is None:
             dtype = self.torch_dtype
 
@@ -29,9 +30,15 @@ class BasePredictor:
         self.processor = loader.processor()
 
     def to(self, device_dtype: torch.device | str | None = None):
-        if self.model:
+        model_moved = False
+        if hasattr(self, "model") and self.model:
             self.model.to(device_dtype)
-        else:
+            model_moved = True
+        if hasattr(self, "foundation_predictor") and self.foundation_predictor:
+            self.foundation_predictor.model.to(device_dtype)
+            model_moved = True
+
+        if not model_moved:
             raise ValueError("Model not loaded")
 
     def get_batch_size(self):
@@ -51,7 +58,7 @@ class BasePredictor:
         pad_size = batch_size - current_batch_size
         padding = (0, 0) * (tensor.dim() - 1) + (0, pad_size)
 
-        return F.pad(tensor, padding, mode='constant', value=0)
+        return F.pad(tensor, padding, mode="constant", value=0)
 
     def __call__(self, *args, **kwargs):
         raise NotImplementedError()

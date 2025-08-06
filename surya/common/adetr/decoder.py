@@ -11,8 +11,6 @@ from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.modeling_outputs import BaseModelOutputWithNoAttention
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 
-from surya.common.xla import mark_step
-
 _MAX_SQRT_GRADIENT = 1000.0
 
 
@@ -207,7 +205,6 @@ class SuryaADETRDecoderSdpaCrossAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        mark_step()
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query_states,
             key_states,
@@ -216,7 +213,6 @@ class SuryaADETRDecoderSdpaCrossAttention(nn.Module):
             dropout_p=self.attention_dropout if self.training else 0.0,
             scale=self.head_dim**-0.5,
         )
-        mark_step()
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)
@@ -332,7 +328,6 @@ class SuryaADETRDecoderSdpaAttention(nn.Module):
                     causal_mask.dtype
                 ).min
 
-        mark_step()
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query_states,
             key_states,
@@ -341,7 +336,6 @@ class SuryaADETRDecoderSdpaAttention(nn.Module):
             dropout_p=self.attention_dropout if self.training else 0.0,
             scale=self.head_dim**-0.5,
         )
-        mark_step()
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)

@@ -83,6 +83,7 @@ class TableRecPredictor(BasePredictor):
                     use_cache=True,
                     prefill=is_prefill,
                 )
+                mark_step()
 
                 decoder_position_ids = decoder_position_ids[-1:] + 1
 
@@ -156,6 +157,7 @@ class TableRecPredictor(BasePredictor):
 
                 # Move to device after padding for XLA
                 batch_input_ids = batch_input_ids.to(self.model.device)
+
         return batch_predictions
 
     def batch_table_recognition(
@@ -227,6 +229,7 @@ class TableRecPredictor(BasePredictor):
                 encoder_hidden_states = self.model.encoder(
                     pixel_values=batch_pixel_values
                 ).last_hidden_state
+                mark_step()
 
             # Inference to get rows and columns
             rowcol_predictions = self.inference_loop(
@@ -286,7 +289,6 @@ class TableRecPredictor(BasePredictor):
                         batch_size,
                     )
                 )
-                mark_step()
 
             result = self.decode_batch_predictions(
                 rowcol_predictions, cell_predictions, orig_sizes, idx_map, shaper

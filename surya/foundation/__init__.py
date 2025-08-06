@@ -122,6 +122,10 @@ class FoundationPredictor(BasePredictor):
             else None
         )
 
+    def to(self, device_dtype: torch.device | str | None = None):
+        super().to(device_dtype)
+        self.special_token_ids = self.special_token_ids.to(device_dtype)
+
     def get_encoder_chunk_size(self) -> int:
         if settings.FOUNDATION_CHUNK_SIZE is not None:
             return settings.FOUNDATION_CHUNK_SIZE

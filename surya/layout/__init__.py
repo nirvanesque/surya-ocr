@@ -115,6 +115,7 @@ class LayoutPredictor(BasePredictor):
                 encoder_hidden_states = self.model.encoder(
                     pixel_values=batch_pixel_values
                 )[0]
+                mark_step()
 
                 token_count = 0
                 # Set to the actual batch size (accounts for padding if needed)
@@ -132,6 +133,7 @@ class LayoutPredictor(BasePredictor):
                         use_cache=True,
                         prefill=is_prefill,
                     )
+                    mark_step()
 
                     decoder_position_ids = decoder_position_ids[-1:] + 1
                     box_logits = return_dict["bbox_logits"][:, -1, :]
@@ -225,7 +227,6 @@ class LayoutPredictor(BasePredictor):
                     token_count += inference_token_count
                     inference_token_count = batch_decoder_input.shape[1]
                     batch_decoder_input = batch_decoder_input.to(torch.long)
-                    mark_step()
 
             for j, (pred_dict, orig_size) in enumerate(
                 zip(batch_predictions, orig_sizes)
