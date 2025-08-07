@@ -16,6 +16,7 @@ class SimpleTokenEmbedder(nn.Module):
                 for _ in range(6)
             ]
         )
+        self.max_bbox_embedding = config.bbox_size + config.special_token_count - 1
 
     def embed(
         self,
@@ -30,9 +31,7 @@ class SimpleTokenEmbedder(nn.Module):
         if input_boxes is not None:  # Is none in prefill
             input_boxes = input_boxes.to(torch.long)
             bbox_loss_ignore_mask = (input_boxes[:, :, 0] < 0).unsqueeze(-1)
-            input_boxes = torch.where(
-                input_boxes > 0, input_boxes, torch.zeros_like(input_boxes)
-            )
+            input_boxes = torch.clamp(input_boxes, 0, self.max_bbox_embedding)
 
             bbox_embeds = torch.sum(
                 torch.stack(

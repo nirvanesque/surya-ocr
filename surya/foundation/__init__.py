@@ -396,7 +396,7 @@ class FoundationPredictor(BasePredictor):
 
         needs_bbox_embedding = torch.tensor(
             [
-                p.task_name in [TaskNames.layout, TaskNames.table_recognition]
+                p.task_name in [TaskNames.layout, TaskNames.table_structure]
                 for p in prompts
             ],
             device=self.model.device,

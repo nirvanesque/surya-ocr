@@ -3,7 +3,7 @@ class TaskNames:
     ocr_with_boxes = "ocr_with_boxes"
     ocr_without_boxes = "ocr_without_boxes"
     layout = "layout"
-    table_recognition = "table_recognition"
+    table_structure = "table_structure"
 
 
 TASK_NAMES = [
@@ -11,5 +11,5 @@ TASK_NAMES = [
     TaskNames.ocr_with_boxes,
     TaskNames.ocr_without_boxes,
     TaskNames.layout,
-    TaskNames.table_recognition,
+    TaskNames.table_structure,
 ]
