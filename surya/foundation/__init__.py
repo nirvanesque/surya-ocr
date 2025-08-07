@@ -281,7 +281,8 @@ class FoundationPredictor(BasePredictor):
                 use_cache=True,
                 past_key_values=self.kv_cache,
                 prefill=False,
-                num_valid_tokens=num_valid_tokens
+                num_valid_tokens=num_valid_tokens,
+                logits_to_keep=1,
             )
 
         processed_output: ContinuousBatchOutput = self.process_outputs(outputs, max_lookahead_tokens=max_lookahead_tokens)
@@ -399,6 +400,7 @@ class FoundationPredictor(BasePredictor):
                 prefill=True,
                 num_valid_tokens=None,   # Not required during prefill
                 text_lengths=text_lengths,
+                logits_to_keep=1
             )
         
         # Process outputs
