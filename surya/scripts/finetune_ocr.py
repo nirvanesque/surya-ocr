@@ -1,5 +1,4 @@
 from __future__ import annotations
-import copy
 from dataclasses import dataclass, field
 from typing import Optional
 from datasets import load_dataset
@@ -11,15 +10,22 @@ from transformers import (
     Trainer,
 )
 
+from surya.common.surya import SuryaModel
+from surya.common.surya.processor import SuryaOCRProcessor
 from surya.foundation import FoundationPredictor
 from surya.common.surya.processor.schema import ImageInput, TextInput
 from surya.common.surya.schema import TaskNames
 
+# Do not change these defaults
+OCR_TASK_NAME = TaskNames.ocr_with_boxes
+OCR_MAX_IMAGE_SIZE = (1024, 512)
+
 # Simple wrapper for huggingface dataset
 class SuryaOCRDataset(torch.utils.data.Dataset):
-    def __init__(self, data_args: SuryaOCRDataArguments):
+    def __init__(self, processor: SuryaOCRProcessor, data_args: SuryaOCRDataArguments):
         super().__init__()
         self.hf_dataset = load_dataset(data_args.dataset_name, num_proc=data_args.num_loading_proc, split="train")
+        self.processor = processor
 
     def __len__(self):
         return len(self.hf_dataset)
@@ -30,6 +36,8 @@ class SuryaOCRDataset(torch.utils.data.Dataset):
             image = data["image"]
             image = image.convert("RGB")
             image = np.asarray(image, dtype=np.float32)
+            image = self.processor.scale_to_fit(image, max_size=OCR_MAX_IMAGE_SIZE)
+
             gt_text = data["text"]
 
             return_dict = {
@@ -47,14 +55,20 @@ class SuryaOCRDataset(torch.utils.data.Dataset):
             return self.__getitem__((index + 1) % self.__len__())
 
 class SuryaOCRDataCollator:
-    def __init__(self, processor):
+    def __init__(self, processor: SuryaOCRProcessor, data_args: SuryaOCRDataArguments):
         self.processor = processor
+        self.max_sequence_length = data_args.max_sequence_length
 
     def __call__(self, inputs):
         # Use right padding for training. Defaults to left for inference
         processed_batch = self.processor(inputs, padding_side="right")
+        
+        if self.max_sequence_length is not None:
+            processed_batch["input_ids"] = processed_batch["input_ids"][:, :self.max_sequence_length]
+            processed_batch["attention_mask"] = processed_batch["attention_mask"][:, :self.max_sequence_length]
+            processed_batch["position_ids"] = processed_batch["position_ids"][:, :self.max_sequence_length]
 
-        lm_labels = copy.deepcopy(processed_batch["input_ids"])
+        lm_labels = processed_batch["input_ids"].clone()
         skip_label_mask = (
             (lm_labels == self.processor.pad_token_id )
             | (lm_labels == self.processor.bos_token_id[TaskNames.ocr_with_boxes])
@@ -78,6 +92,7 @@ class SuryaOCRModelArguments:
 class SuryaOCRDataArguments:
     dataset_name: str = field(default="Kratos-AI/KAI_handwriting-ocr")
     num_loading_proc: int = field(default=16)
+    max_sequence_length: Optional[int] = field(default=None)
 
 @dataclass
 class SuryaOCRTrainingArguments(TrainingArguments):
@@ -88,8 +103,8 @@ def main():
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     model, processor = load_model_and_processor(model_args.pretrained_checkpoint_path)
-    dataset = SuryaOCRDataset(data_args)
-    collator = SuryaOCRDataCollator(processor)
+    dataset = SuryaOCRDataset(processor, data_args)
+    collator = SuryaOCRDataCollator(processor, data_args)
 
     trainer = Trainer(
         model=model,
