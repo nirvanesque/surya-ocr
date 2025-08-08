@@ -558,7 +558,7 @@ To setup your dataset, follow the example dataset format [here](https://huggingf
 ```bash
 # Tested on 1xH100 GPU
 python surya/scripts/finetune_ocr.py \
-  --dataset_name datalab-to/ocr_finetune_example \ 
+  --dataset_name datalab-to/ocr_finetune_example \
   --per_device_train_batch_size 64 \
   --gradient_checkpointing true \
   --max_sequence_length 1024
