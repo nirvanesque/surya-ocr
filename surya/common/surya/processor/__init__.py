@@ -321,10 +321,13 @@ class SuryaOCRProcessor(S3DownloaderMixin, ProcessorMixin):
                 # Case for input - Add task specific bos token + end_of_input token
                 # We do not want the model to learn how to predict inputs. Hence IGNORE_INDEX for these
                 input_ids = [bos_token_id] + input_ids + [self.eoi_token_id]
-            elif i > 1:
-                raise ValueError(
-                    f"Unexpected input type encountered in mixed input processing. We only accept input image and text. {mixed_input}"
+            if i == 2:
+                assert input_dict["type"] == "text", (
+                    "Expected text for final model input"
                 )
+                input_ids = input_ids + [self.eos_token_id]
+            elif i > 2:
+                raise ValueError(f"Too many inputs received. Expected is 2 for inference, 3 for training. Received: {len(mixed_input)}")
 
             # Some input types don't return any image tiles, accounting for that
             if image_tiles is not None:
