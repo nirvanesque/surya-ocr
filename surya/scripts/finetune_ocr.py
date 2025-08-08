@@ -98,7 +98,7 @@ class SuryaOCRModelArguments:
 
 @dataclass
 class SuryaOCRDataArguments:
-    dataset_name: str = field(default="Kratos-AI/KAI_handwriting-ocr")
+    dataset_name: str = field(default="datalab-to/ocr_finetune_example")
     num_loading_proc: int = field(default=16)
     max_sequence_length: Optional[int] = field(default=None)
 

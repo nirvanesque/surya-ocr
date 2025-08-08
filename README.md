@@ -550,6 +550,22 @@ Text detection was trained on 4x A6000s for 3 days.  It used a diverse set of im
 
 Text recognition was trained on 4x A6000s for 2 weeks.  It was trained using a modified donut model (GQA, MoE layer, UTF-16 decoding, layer config changes).
 
+# Finetuning Surya OCR
+You can now take Surya OCR further by training it on your own data with our [finetuning script](/surya/scripts/finetune_ocr.py).
+It’s built on Hugging Face Trainer, and supports all the integrations and [arguments](https://huggingface.co/docs/transformers/en/main_classes/trainer#transformers.TrainingArguments) that the huggingface trainer provides.
+
+To setup your dataset, follow the example dataset format [here](https://huggingface.co/datasets/datalab-to/ocr_finetune_example) and provide the path to your own dataset when launching the training script.
+```bash
+# Tested on 1xH100 GPU
+python surya/scripts/finetune_ocr.py \
+ --dataset_name datalab-to/ocr_finetune_example \       # Replace with your own dataset path
+ --per_device_train_batch_size 64 \
+ --gradient_checkpointing true \
+ --max_sequence_length 1024 \
+```
+
+This is a minimal training script to get you started finetuning Surya. Our internal training stack includes character bounding box finetuning, sliding window attention with specialized attention masks, custom kernels, augmentations, and other optimizations that can push OCR accuracy well beyond standard finetuning. If you want to get the most out of your data, reach us at hi@datalab.to!
+
 # Thanks
 
 This work would not have been possible without amazing open source AI work:
