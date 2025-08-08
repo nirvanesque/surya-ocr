@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple
 from datasets import load_dataset
 import numpy as np
 import torch
@@ -15,6 +15,7 @@ from surya.common.surya.processor import SuryaOCRProcessor
 from surya.foundation import FoundationPredictor
 from surya.common.surya.processor.schema import ImageInput, TextInput
 from surya.common.surya.schema import TaskNames
+from surya.common.util import get_top_scripts, SCRIPT_TOKEN_MAPPING
 
 # Do not change these defaults
 OCR_TASK_NAME = TaskNames.ocr_with_boxes
@@ -30,6 +31,11 @@ class SuryaOCRDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.hf_dataset)
 
+    def get_script_text(self, text: str) -> str:
+        scripts = get_top_scripts(text)
+        script_text = "".join(SCRIPT_TOKEN_MAPPING[script] for script in scripts)
+        return script_text
+
     def __getitem__(self, index):
         try:
             data = self.hf_dataset[index]
@@ -38,7 +44,9 @@ class SuryaOCRDataset(torch.utils.data.Dataset):
             image = np.asarray(image, dtype=np.float32)
             image = self.processor.scale_to_fit(image, max_size=OCR_MAX_IMAGE_SIZE)
 
+            # Add in script information
             gt_text = data["text"]
+            gt_text = self.get_script_text(gt_text) + gt_text
 
             return_dict = {
                 "task": TaskNames.ocr_with_boxes,
@@ -80,7 +88,7 @@ class SuryaOCRDataCollator:
 
         return processed_batch
 
-def load_model_and_processor(checkpoint_path: Optional[str] = None):
+def load_model_and_processor(checkpoint_path: Optional[str] = None) -> Tuple[SuryaModel, SuryaOCRProcessor]:
     foundation_predictor = FoundationPredictor(checkpoint=checkpoint_path)
     return foundation_predictor.model, foundation_predictor.processor
 
