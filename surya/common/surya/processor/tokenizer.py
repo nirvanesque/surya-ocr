@@ -52,7 +52,8 @@ class InnerOCRTokenizer:
         self.FORMAT_TAG_PATTERN = create_token_regex(special_tokens["formatting"])
         self.MATH_TAG_PATTERN = create_token_regex(special_tokens["math_external"])
         self.LAYOUT_TAG_PATTERN = create_token_regex(special_tokens["layout"])
-        self.SYSTEM_TAG_PATTERN = create_token_regex(special_tokens.get("system", []))
+        self.SCRIPT_TAG_PATTERN = create_token_regex(special_tokens["script"])
+        self.SYSTEM_TAG_PATTERN = create_token_regex(special_tokens.get("system", []))        
         if not special_tokens.get("system", []):
             logger.warning("Warning: No system tokens found in special_tokens")
 
@@ -107,6 +108,16 @@ class InnerOCRTokenizer:
                 text = text[match.end() :]
                 continue
 
+            # Check for script tags
+            match = self.SCRIPT_TAG_PATTERN.search(text)
+            if match:
+                tag = match.group(1)
+                tokens.append(
+                    self.SPECIAL_TOKEN_MAPPING[tag]
+                )  # These are already offset
+                text = text[match.end() :]
+                continue
+                
             # Tokenize math content with qwen2 tokenizer
             if in_math:
                 # If we're in a math block, check to see if we have a special math tag in the text
