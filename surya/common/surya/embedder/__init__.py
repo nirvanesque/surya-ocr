@@ -30,7 +30,9 @@ class SimpleTokenEmbedder(nn.Module):
         # Optionally embed boxes
         if input_boxes is not None:  # Is none in prefill
             input_boxes = input_boxes.to(torch.long)
-            bbox_loss_ignore_mask = (input_boxes[:, :, 0] < 0).unsqueeze(-1)
+            bbox_loss_ignore_mask = (
+                (input_boxes[:, :, 0] < 0) | (input_boxes[:, :, 0] > self.max_bbox_size)
+            ).unsqueeze(-1)
             input_boxes = torch.clamp(input_boxes, 0, self.max_bbox_embedding)
 
             bbox_embeds = torch.sum(
@@ -50,9 +52,8 @@ class SimpleTokenEmbedder(nn.Module):
             embed_boxes = embed_boxes.unsqueeze(1).unsqueeze(1).expand_as(bbox_embeds)
             bbox_loss_ignore_mask = bbox_loss_ignore_mask.expand_as(bbox_embeds)
 
-            zero_boxes = torch.zeros_like(token_embeds)
-            bbox_embeds = torch.where(embed_boxes, bbox_embeds, zero_boxes)
-            bbox_embeds = torch.where(bbox_loss_ignore_mask, zero_boxes, bbox_embeds)
+            mask = embed_boxes & ~bbox_loss_ignore_mask
+            bbox_embeds *= mask.float()
 
             token_embeds = token_embeds + bbox_embeds
 

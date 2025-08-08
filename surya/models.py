@@ -23,5 +23,5 @@ def load_predictors(
         "ocr_error": OCRErrorPredictor(device=device, dtype=dtype),
         "recognition": RecognitionPredictor(foundation_predictor),
         "detection": DetectionPredictor(device=device, dtype=dtype),
-        "table_rec": TableRecPredictor(device=device, dtype=dtype),
+        "table_rec": TableRecPredictor(foundation_predictor),
     }
