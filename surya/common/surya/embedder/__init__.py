@@ -17,6 +17,7 @@ class SimpleTokenEmbedder(nn.Module):
             ]
         )
         self.max_bbox_embedding = config.bbox_size + config.special_token_count - 1
+        self.max_bbox_size = config.bbox_size
 
     def embed(
         self,
