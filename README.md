@@ -557,7 +557,10 @@ It’s built on Hugging Face Trainer, and supports all the [arguments](https://h
 To setup your dataset, follow the example dataset format [here](https://huggingface.co/datasets/datalab-to/ocr_finetune_example) and provide the path to your own dataset when launching the training script.
 ```bash
 # Tested on 1xH100 GPU
+# Set --pretrained_checkpoint_path to load from a custom checkpoint, otherwise
+# the default surya ocr weights will be loaded as the initialization
 python surya/scripts/finetune_ocr.py \
+  --output_dir $OUTPUT_DIR \
   --dataset_name datalab-to/ocr_finetune_example \
   --per_device_train_batch_size 64 \
   --gradient_checkpointing true \
