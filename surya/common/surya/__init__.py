@@ -367,6 +367,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     def forward(
         self,
         input_ids=None,
+        labels=None,
         image_tiles=None,
         grid_thw=None,
         inputs_embeds=None,
@@ -377,11 +378,12 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         output_hidden_states=False,
         output_attentions=False,
         use_cache=False,
-        encoder_chunk_size=None,
+        encoder_chunk_size=32768,
         cache_idxs=None,
         num_valid_tokens=None,
-        prefill=False,
+        prefill=True,
         text_lengths=None,
+        logits_to_keep=None,
         **kwargs: KwargsForCausalLM,
     ):
         # Process the mixed batch if provided
@@ -444,12 +446,23 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         )
 
         hidden_states = outputs.last_hidden_state
-        # Only keep the last `logits_to_keep` logits, should bring down memory usage during inference
-        hidden_states = hidden_states[:, -1:, :]
+        if logits_to_keep is not None:
+            hidden_states = hidden_states[:, -logits_to_keep:, :]
         hidden_states = hidden_states.contiguous()
-        lm_logits, bbox_logits = self.get_logits(hidden_states)
+
+        loss = None
+        if labels is not None:
+            # Training, return full logits
+            lm_logits = self.lm_head(hidden_states)
+            bbox_logits = None
+            vocab_size = lm_logits.shape[-1]
+            labels = torch.roll(labels, shifts=-1, dims=-1)
+            loss = F.cross_entropy(lm_logits.view(-1, vocab_size), labels.view(-1), reduction="mean")
+        else:
+            lm_logits, bbox_logits = self.get_logits(hidden_states)
 
         return SuryaModelOutput(
+            loss=loss,
             bbox_logits=bbox_logits,
             lm_logits=lm_logits,
             hidden_states=outputs.hidden_states if output_hidden_states else None,
