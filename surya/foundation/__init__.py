@@ -464,19 +464,19 @@ class FoundationPredictor(BasePredictor):
             )
 
         # Find text lengths of each
+        # Oddly, this is optimal on GPU - causes a 30% slowdown if "optimized"
         is_special = (
-            input_ids.unsqueeze(-1).eq(self.special_token_ids).any(-1)
-        )  # (B, L) bool
-
-        idx = (
-            torch.arange(input_ids.size(1), device=input_ids.device, dtype=torch.long)
-            + 1
-        )  # 1…L
-        last_special_plus1 = (is_special * idx).max(dim=1).values  # (B,) 0 if none
-
-        text_lengths = (input_ids.size(1) - last_special_plus1).to(
-            dtype=torch.long
-        )  # (B,)
+            (input_ids.unsqueeze(-1) == self.special_token_ids).any(-1).cpu()
+        )  # (batch, seq_len)
+        text_lengths = []
+        for i in range(input_ids.shape[0]):
+            special_positions = is_special[i].nonzero(as_tuple=True)[0]
+            if len(special_positions) > 0:
+                # Assuming special tokens are contiguous at the start
+                prefix_len = special_positions[-1].item() + 1
+            else:
+                prefix_len = 0
+            text_lengths.append(input_ids.shape[1] - prefix_len)
 
         with settings.INFERENCE_MODE():
             image_embeddings = self.model.get_image_embeddings(

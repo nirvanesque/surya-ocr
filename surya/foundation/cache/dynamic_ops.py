@@ -91,8 +91,11 @@ class DynamicOpsCache:
 
     def update_text_counts(self, cache_idxs: List[int], new_text_lens: torch.Tensor):
         assert len(cache_idxs) == len(new_text_lens)
+        new_text_len_tensor = torch.tensor(
+            new_text_lens, dtype=torch.long, device=self.device
+        )
         for layer_idx in range(self.num_layers):
-            self.text_token_counts[layer_idx][cache_idxs] = new_text_lens
+            self.text_token_counts[layer_idx][cache_idxs] = new_text_len_tensor
 
     # Mirrors the logic from _prefill_update
     # Logic is better explained in this funcrtion
