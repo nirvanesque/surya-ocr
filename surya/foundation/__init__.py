@@ -482,7 +482,7 @@ class FoundationPredictor(BasePredictor):
             image_embeddings = self.model.get_image_embeddings(
                 pixel_values=image_tiles,
                 grid_thw=grid_thw,
-                encoder_chunk_size=self.encoder_chunk_size,
+                encoder_chunk_size=self.get_encoder_chunk_size(),
                 valid_batch_size=valid_batch_size,
                 max_batch_size=self.kv_cache.max_batch_size,
             )
