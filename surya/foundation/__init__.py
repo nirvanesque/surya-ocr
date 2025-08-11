@@ -258,7 +258,7 @@ class FoundationPredictor(BasePredictor):
         # Padded input ids.
         new_input_ids = torch.full(
             (batch_size, seq_len + 1),
-            self.device_beacon_token,
+            self.device_pad_token,
             dtype=input_ids.dtype,
             device=input_ids.device,
         )
@@ -277,6 +277,12 @@ class FoundationPredictor(BasePredictor):
             needs_beacon,
             torch.tensor(seq_len + 1, device=input_ids.device),
             torch.tensor(seq_len, device=input_ids.device),
+        )
+
+        new_input_ids[:, 0] = torch.where(
+            needs_beacon,
+            self.device_beacon_token,
+            self.device_pad_token,
         )
 
         return new_input_ids, new_input_boxes, valid_token_counts

@@ -20,6 +20,7 @@ from surya.common.surya.processor.schema import (
 )
 from surya.common.surya.schema import TaskNames
 from surya.logging import get_logger
+from surya.settings import settings
 
 logger = get_logger()
 
@@ -197,8 +198,13 @@ class SuryaOCRProcessor(S3DownloaderMixin, ProcessorMixin):
         Resizes the input image to the closest multiple of tile_size while preserving the aspect ratio
         and returns a tensor of image tiles.
         """
+        extra_multipler = (
+            4 if settings.FOUNDATION_XLA else 1
+        )  # Needed to force same size grid_thws per row with padding
 
-        factor = self.patch_size * self.merge_size * 4  # Make a multiple of window size
+        factor = (
+            self.patch_size * self.merge_size * extra_multipler
+        )  # Make a multiple of window size
 
         height, width = image.shape[:2]
 
