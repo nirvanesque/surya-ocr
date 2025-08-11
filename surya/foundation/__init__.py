@@ -230,8 +230,11 @@ class FoundationPredictor(BasePredictor):
 
     # Always left pad with beacons, don't worry about attention masking
     def maybe_insert_beacon_tokens(
-        self, input_ids: torch.Tensor, num_predicted_tokens: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self,
+        input_ids: torch.Tensor,
+        input_boxes: torch.Tensor,
+        num_predicted_tokens: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         batch_size, seq_len = (
             input_ids.shape
         )  # seq_len can be >1 - In case of multi-token predictions
@@ -245,9 +248,12 @@ class FoundationPredictor(BasePredictor):
         # If no beacons needed, return original input
         needs_beacon = beacon_positions.any(dim=1)  # shape: [batch_size]
         if not needs_beacon.any():
-            return input_ids, torch.ones(
-                batch_size, dtype=torch.long, device=input_ids.device
-            ) * seq_len
+            return (
+                input_ids,
+                input_boxes,
+                torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
+                * seq_len,
+            )
 
         # Padded input ids.
         new_input_ids = torch.full(
@@ -258,6 +264,14 @@ class FoundationPredictor(BasePredictor):
         )
         new_input_ids[:, 1:] = input_ids
 
+        new_input_boxes = torch.full(
+            (batch_size, seq_len + 1, 6),
+            -100,
+            dtype=input_boxes.dtype,
+            device=input_boxes.device,
+        )
+        new_input_boxes[:, 1:] = input_boxes
+
         # Calculate valid token counts for both padded and non padded sequences
         valid_token_counts = torch.where(
             needs_beacon,
@@ -265,7 +279,7 @@ class FoundationPredictor(BasePredictor):
             torch.tensor(seq_len, device=input_ids.device),
         )
 
-        return new_input_ids, valid_token_counts
+        return new_input_ids, new_input_boxes, valid_token_counts
 
     def decode(
         self,
@@ -313,8 +327,8 @@ class FoundationPredictor(BasePredictor):
         num_new_tokens = input_ids.shape[1]
         num_predicted_tokens += num_new_tokens
 
-        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(
-            input_ids, num_predicted_tokens
+        input_ids, input_boxes, num_valid_tokens = self.maybe_insert_beacon_tokens(
+            input_ids, input_boxes, num_predicted_tokens
         )
         position_ids = position_ids[:, -1:] + torch.arange(
             1, input_ids.shape[1] + 1, device=input_ids.device
@@ -365,7 +379,7 @@ class FoundationPredictor(BasePredictor):
         )
 
         padded_bbox_preds = torch.nn.functional.pad(
-            bbox_preds, (pad_len, 0, 0, 0), value=-100
+            bbox_preds, (0, 0, pad_len, 0), value=-100
         )
 
         # Since we have **left padding**, offset the new position_ids by the amount of padding
@@ -531,6 +545,7 @@ class FoundationPredictor(BasePredictor):
         current_input_ids = current_inputs.input_ids
         current_position_ids = current_inputs.position_ids
         current_input_boxes = current_inputs.input_boxes
+
         current_needs_bbox_embedding = current_inputs.needs_bbox_embedding
 
         assert current_input_ids.shape[1] == current_position_ids.shape[1]
@@ -540,6 +555,7 @@ class FoundationPredictor(BasePredictor):
             position_ids,
             new_seq_len=current_input_ids.shape[1],
         )
+
         current_input_ids[idxs_to_merge] = input_ids[:valid_batch_size]
         current_input_boxes[idxs_to_merge] = bbox_preds[:valid_batch_size]
         current_position_ids[idxs_to_merge] = position_ids[:valid_batch_size]
