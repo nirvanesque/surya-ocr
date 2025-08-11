@@ -4,9 +4,7 @@ import re
 from typing import List
 
 import numpy as np
-import torch
 from PIL import Image
-import torch.nn.functional as F
 
 from surya.common.polygon import PolygonBox
 from surya.common.surya.processor import NOMATH_TOKEN
@@ -26,7 +24,7 @@ from surya.recognition.util import (
     unwrap_math,
     clean_math_tags,
     filter_blacklist_tags,
-    words_from_chars
+    words_from_chars,
 )
 from surya.foundation.util import detect_repeat_token, prediction_to_polygon_batch
 from surya.recognition.schema import TextLine, OCRResult, TextChar
@@ -36,6 +34,7 @@ from surya.logging import get_logger, configure_logging
 
 configure_logging()
 logger = get_logger()
+
 
 class RecognitionPredictor(BasePredictor):
     batch_size = settings.RECOGNITION_BATCH_SIZE
@@ -406,9 +405,7 @@ class RecognitionPredictor(BasePredictor):
         # No images passed, or no boxes passed, or no text detected in the images
         if len(flat["slices"]) == 0:
             return [
-                OCRResult(
-                    text_lines=[], image_bbox=[0, 0, im.size[0], im.size[1]]
-                )
+                OCRResult(text_lines=[], image_bbox=[0, 0, im.size[0], im.size[1]])
                 for im in images
             ]
 
@@ -422,16 +419,18 @@ class RecognitionPredictor(BasePredictor):
         flat["task_names"] = [flat["task_names"][i] for i in indices]
 
         # Make predictions
-        predicted_tokens, batch_bboxes, scores, _ = self.foundation_predictor.prediction_loop(
-            images=flat["slices"],
-            input_texts=flat["input_text"],
-            task_names=flat["task_names"],
-            batch_size=recognition_batch_size,
-            math_mode=math_mode,
-            drop_repeated_tokens=True,
-            max_lookahead_tokens=0,
-            max_sliding_window=max_sliding_window,
-            max_tokens=max_tokens,
+        predicted_tokens, batch_bboxes, scores, _ = (
+            self.foundation_predictor.prediction_loop(
+                images=flat["slices"],
+                input_texts=flat["input_text"],
+                task_names=flat["task_names"],
+                batch_size=recognition_batch_size,
+                math_mode=math_mode,
+                drop_repeated_tokens=True,
+                max_lookahead_tokens=0,
+                max_sliding_window=max_sliding_window,
+                max_tokens=max_tokens,
+            )
         )
 
         # Get text and bboxes in structured form

@@ -3,7 +3,11 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
-from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
+from transformers.image_processing_utils import (
+    BaseImageProcessor,
+    BatchFeature,
+    get_size_dict,
+)
 from transformers.image_transforms import to_channel_dimension_format
 from transformers.image_utils import (
     IMAGENET_DEFAULT_MEAN,
@@ -18,7 +22,6 @@ from transformers.utils import TensorType
 
 
 import PIL.Image
-import torch
 
 from surya.common.s3 import S3DownloaderMixin
 
@@ -91,7 +94,9 @@ class SegformerImageProcessor(S3DownloaderMixin, BaseImageProcessor):
         self.do_rescale = do_rescale
         self.rescale_factor = rescale_factor
         self.do_normalize = do_normalize
-        self.image_mean = image_mean if image_mean is not None else IMAGENET_DEFAULT_MEAN
+        self.image_mean = (
+            image_mean if image_mean is not None else IMAGENET_DEFAULT_MEAN
+        )
         self.image_std = image_std if image_std is not None else IMAGENET_DEFAULT_STD
         self.do_reduce_labels = do_reduce_labels
         self._valid_processor_keys = [
@@ -136,12 +141,18 @@ class SegformerImageProcessor(S3DownloaderMixin, BaseImageProcessor):
         image_std: Optional[Union[float, List[float]]] = None,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
     ):
-
         if do_rescale:
-            image = self.rescale(image=image, scale=rescale_factor, input_data_format=input_data_format)
+            image = self.rescale(
+                image=image, scale=rescale_factor, input_data_format=input_data_format
+            )
 
         if do_normalize:
-            image = self.normalize(image=image, mean=image_mean, std=image_std, input_data_format=input_data_format)
+            image = self.normalize(
+                image=image,
+                mean=image_mean,
+                std=image_std,
+                input_data_format=input_data_format,
+            )
 
         return image
 
@@ -177,7 +188,9 @@ class SegformerImageProcessor(S3DownloaderMixin, BaseImageProcessor):
             input_data_format=input_data_format,
         )
         if data_format is not None:
-            image = to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
+            image = to_channel_dimension_format(
+                image, data_format, input_channel_dim=input_data_format
+            )
         return image
 
     def __call__(self, images, segmentation_maps=None, **kwargs):
@@ -260,7 +273,9 @@ class SegformerImageProcessor(S3DownloaderMixin, BaseImageProcessor):
         do_normalize = do_normalize if do_normalize is not None else self.do_normalize
         resample = resample if resample is not None else self.resample
         size = size if size is not None else self.size
-        rescale_factor = rescale_factor if rescale_factor is not None else self.rescale_factor
+        rescale_factor = (
+            rescale_factor if rescale_factor is not None else self.rescale_factor
+        )
         image_mean = image_mean if image_mean is not None else self.image_mean
         image_std = image_std if image_std is not None else self.image_std
 

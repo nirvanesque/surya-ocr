@@ -1,4 +1,3 @@
-from typing import Optional
 import torch
 import torch.nn.functional as F
 from flash_attn import flash_attn_varlen_func as _flash_attn_varlen_func
@@ -6,7 +5,10 @@ from flash_attn import flash_attn_with_kvcache as _flash_attn_with_kvcache
 from flash_attn.bert_padding import index_first_axis as _index_first_axis
 from flash_attn.bert_padding import pad_input
 
-def _get_unpad_data(attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, int]:
+
+def _get_unpad_data(
+    attention_mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, int]:
     """
     Retrieves indexing data required to repad unpadded (ragged) tensors.
 
@@ -32,6 +34,7 @@ def _get_unpad_data(attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.T
         max_seqlen_in_batch,
     )
 
+
 def _upad_input(
     query_layer: torch.Tensor,
     key_layer: torch.Tensor,
@@ -39,7 +42,7 @@ def _upad_input(
     query_length: int,
     indices_k,
     cu_seqlens_k,
-    max_seqlen_in_batch_k
+    max_seqlen_in_batch_k,
 ):
     """
     Unpads query, key, and values tensors, using a single dimension for all tokens even though they belong to different batches.
@@ -75,12 +78,18 @@ def _upad_input(
     """
     batch_size, kv_seq_len, num_key_value_heads, head_dim = key_layer.shape
 
-    key_layer = _index_first_axis(key_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim), indices_k)
+    key_layer = _index_first_axis(
+        key_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim),
+        indices_k,
+    )
     value_layer = _index_first_axis(
-        value_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim), indices_k
+        value_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim),
+        indices_k,
     )
     if query_length == kv_seq_len:
-        query_layer = _index_first_axis(query_layer.reshape(batch_size * kv_seq_len, -1, head_dim), indices_k)
+        query_layer = _index_first_axis(
+            query_layer.reshape(batch_size * kv_seq_len, -1, head_dim), indices_k
+        )
         cu_seqlens_q = cu_seqlens_k
         max_seqlen_in_batch_q = max_seqlen_in_batch_k
         indices_q = indices_k
@@ -103,6 +112,7 @@ def _upad_input(
         (max_seqlen_in_batch_q, max_seqlen_in_batch_k),
     )
 
+
 def flash_attn_prefill(
     module: torch.nn.Module,
     query_states: torch.Tensor,
@@ -116,7 +126,7 @@ def flash_attn_prefill(
     indices_k: torch.Tensor,
     cu_seqlens_k: torch.Tensor,
     max_seqlen_in_batch_k: int,
-    **kwargs
+    **kwargs,
 ):
     """
     Wrapper for flash attention during the prefill stage
@@ -127,9 +137,19 @@ def flash_attn_prefill(
 
     query_length, batch_size, indices_k, cu_seqlens_k, and max_seqlen_in_batch_k should come from the flash attention kwargs
     """
-    query_states, key_states, value_states = query_states.transpose(1,2), key_states.transpose(1,2), value_states.transpose(1,2)
+    query_states, key_states, value_states = (
+        query_states.transpose(1, 2),
+        key_states.transpose(1, 2),
+        value_states.transpose(1, 2),
+    )
     q_flash, k_flash, v_flash, indices_q, cu_seq_lens, max_seq_lens = _upad_input(
-        query_states, key_states, value_states, query_length, indices_k, cu_seqlens_k, max_seqlen_in_batch_k
+        query_states,
+        key_states,
+        value_states,
+        query_length,
+        indices_k,
+        cu_seqlens_k,
+        max_seqlen_in_batch_k,
     )
     cu_seqlens_q, cu_seqlens_k = cu_seq_lens
     max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
@@ -149,6 +169,7 @@ def flash_attn_prefill(
     )
     return pad_input(flash_attn_out, indices_q, batch_size, query_length), None
 
+
 # NOTE: Does not support dropout, accepts argument as kwargs to maintain compatibility
 # This function is an order of magnitude faster than the prefill variant, or using the HF interface
 def flash_attn_decode(
@@ -162,13 +183,13 @@ def flash_attn_decode(
 ):
     """
     Wrapper for flash attention during the decode stage
-    
+
     query_states must have shape (batch_size, num_heads, seq_len, head_dim), 1 is the seq length in the decoding stage
     key_states and value_states must have shape (batch_size, num_kv_heads, kv_len, head_dim)
 
     This is the opposite of what is required by flash attention, but keeps parity with the HF convention
 
-    This function computes the left pad and cache seqlens to pass into FA2. For example - 
+    This function computes the left pad and cache seqlens to pass into FA2. For example -
     Given an attention_mask shaped (batch_size=2, seq_len=8), where 0 = padding, 1 = real token
     attention_mask =
     tensor([
@@ -179,10 +200,17 @@ def flash_attn_decode(
     cache_seqlens = tensor([5, 7], dtype=torch.int32)
     These values allow FlashAttention to use a static cache layout with efficient slicing during decoding.
     """
-    query_states, key_states, value_states = query_states.transpose(1,2), key_states.transpose(1,2), value_states.transpose(1,2)
+    query_states, key_states, value_states = (
+        query_states.transpose(1, 2),
+        key_states.transpose(1, 2),
+        value_states.transpose(1, 2),
+    )
 
     cache_leftpad = (attention_mask == 0).cumprod(dim=1).sum(dim=1).to(torch.int32)
-    cache_seqlens = (attention_mask * torch.arange(attention_mask.size(1), device=attention_mask.device)).argmax(dim=1).to(torch.int32) + 1
+    cache_seqlens = (
+        attention_mask
+        * torch.arange(attention_mask.size(1), device=attention_mask.device)
+    ).argmax(dim=1).to(torch.int32) + 1
 
     # Returning None for attn_weights to match other attention interfaces
     return _flash_attn_with_kvcache(

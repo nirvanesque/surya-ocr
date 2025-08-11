@@ -1,8 +1,6 @@
 import re
-from typing import List, Tuple
+from typing import List
 
-import numpy
-import torch
 
 from surya.common.polygon import PolygonBox
 from surya.recognition.schema import TextLine, TextWord, TextChar
@@ -31,6 +29,7 @@ MATH_BLOCK = re.compile(r"(<math\b[^>]*>)(.*?)</math>", flags=re.I | re.S)
 STRIP_TAGS = re.compile(r"</?(?:br|u|del|mark|i|b|sup|sub)\b[^>]*>", flags=re.I | re.S)
 BLACKLIST_TAGS = {"p", "li", "ul", "ol", "table", "td", "tr", "th"}
 
+
 def filter_blacklist_tags(text_chars: List[TextChar]) -> List[TextChar]:
     filtered_chars = []
     char_buffer = []
@@ -45,18 +44,18 @@ def filter_blacklist_tags(text_chars: List[TextChar]) -> List[TextChar]:
         elif in_tag:
             char_buffer.append(text_char)
             if char == ">":
-                full_tag = ''.join(c.text for c in char_buffer)
+                full_tag = "".join(c.text for c in char_buffer)
                 inner = full_tag[1:-1].strip()  # remove < >
                 inner = inner.strip("/")  # remove '/'
-                
+
                 # Possible that it is just an empty <>
                 if not inner:
                     filtered_chars.extend(char_buffer)
                     in_tag = False
                     char_buffer = []
                     continue
-                
-                tag_name_candidate = inner.split()[0]   # remove any attributes
+
+                tag_name_candidate = inner.split()[0]  # remove any attributes
                 if tag_name_candidate in BLACKLIST_TAGS:
                     # Discard tag
                     pass
