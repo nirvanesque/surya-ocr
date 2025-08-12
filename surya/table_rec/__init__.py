@@ -28,6 +28,9 @@ class TableRecPredictor(BasePredictor):
     ) -> List[LayoutResult]:
         assert all([isinstance(image, Image.Image) for image in images])
 
+        if len(images) == 0:
+            return []
+
         images = convert_if_not_rgb(images)
         images = [self.processor.image_processor(image) for image in images]
 

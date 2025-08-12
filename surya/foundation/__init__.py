@@ -416,8 +416,11 @@ class FoundationPredictor(BasePredictor):
         ]
         non_active_idxs = [k for k, v in self.batch_prompt_mapping.items() if v is None]
         idxs_to_merge = non_active_idxs[: len(prompts)]
+
+        # Always static shape
+        cache_idxs = [i in idxs_to_merge for i in range(len(self.batch_prompt_mapping))]
         merge_idx_mask = torch.tensor(
-            [i in idxs_to_merge for i in range(len(self.batch_prompt_mapping))],
+            cache_idxs,
             device=self.model.device,
             dtype=torch.bool,
         )
@@ -430,7 +433,6 @@ class FoundationPredictor(BasePredictor):
                 p.task_name in [TaskNames.layout, TaskNames.table_structure]
                 for p in prompts
             ],
-            device=self.model.device,
             dtype=torch.bool,
         )
 
@@ -449,15 +451,9 @@ class FoundationPredictor(BasePredictor):
             pad_to_multiple=self.pad_to_multiple,
         )
 
-        input_ids = processed_inputs["input_ids"].to(
-            dtype=torch.long, device=self.model.device
-        )
-        attention_mask = processed_inputs["attention_mask"].to(
-            dtype=torch.long, device=self.model.device
-        )
-        position_ids = processed_inputs["position_ids"].to(
-            dtype=torch.long, device=self.model.device
-        )
+        input_ids = processed_inputs["input_ids"].to(dtype=torch.long)
+        attention_mask = processed_inputs["attention_mask"].to(dtype=torch.long)
+        position_ids = processed_inputs["position_ids"].to(dtype=torch.long)
         valid_batch_size = len(idxs_to_merge)
 
         # Keep these off device until later
@@ -477,6 +473,12 @@ class FoundationPredictor(BasePredictor):
             needs_bbox_embedding = self.pad_to_batch_size(
                 needs_bbox_embedding, batch_size=self.kv_cache.max_batch_size
             )
+
+        # Move to device after padding
+        input_ids = input_ids.to(device=self.model.device)
+        attention_mask = attention_mask.to(device=self.model.device)
+        position_ids = position_ids.to(device=self.model.device)
+        needs_bbox_embedding = needs_bbox_embedding.to(device=self.model.device)
 
         valid_batch_mask = torch.tensor(
             [i < valid_batch_size for i in range(input_ids.shape[0])],
@@ -498,8 +500,16 @@ class FoundationPredictor(BasePredictor):
             else:
                 prefix_len = 0
             text_lengths.append(input_ids.shape[1] - prefix_len)
+        text_lengths = torch.tensor(text_lengths, device=self.model.device)
 
         with settings.INFERENCE_MODE():
+            logger.debug(
+                f"Shapes - input_ids: {input_ids.shape}, pixel_values: {image_tiles.shape}, grid_thw: {grid_thw.shape}, attention_mask: {attention_mask.shape}, position_ids: {position_ids.shape}"
+            )
+            logger.debug(
+                f"Other values: valid_batch_size: {valid_batch_size}, merge_idx_mask: {merge_idx_mask.shape}, text_lengths: {text_lengths.shape}, needs_bbox_embedding: {needs_bbox_embedding.shape}"
+            )
+
             image_embeddings = self.model.get_image_embeddings(
                 pixel_values=image_tiles,
                 grid_thw=grid_thw,
@@ -509,6 +519,7 @@ class FoundationPredictor(BasePredictor):
             )
             mark_step()
 
+            logger.debug(f"Image embeddings shape: {image_embeddings.shape}")
             outputs = self.model(
                 input_ids=input_ids,
                 image_embeddings=image_embeddings,

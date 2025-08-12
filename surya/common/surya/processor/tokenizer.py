@@ -52,6 +52,9 @@ class InnerOCRTokenizer:
         self.FORMAT_TAG_PATTERN = create_token_regex(special_tokens["formatting"])
         self.MATH_TAG_PATTERN = create_token_regex(special_tokens["math_external"])
         self.LAYOUT_TAG_PATTERN = create_token_regex(special_tokens["layout"])
+        self.TABLE_STRUCTURE_TAG_PATTERN = create_token_regex(
+            special_tokens["table_structure"]
+        )
         self.SYSTEM_TAG_PATTERN = create_token_regex(special_tokens.get("system", []))
         if not special_tokens.get("system", []):
             logger.warning("Warning: No system tokens found in special_tokens")
@@ -89,6 +92,13 @@ class InnerOCRTokenizer:
                 tokens.append(
                     self.SPECIAL_TOKEN_MAPPING[tag]
                 )  # Layout tokens are already offset
+                text = text[match.end() :]
+                continue
+
+            match = self.TABLE_STRUCTURE_TAG_PATTERN.search(text)
+            if match:
+                tag = match.group(1)
+                tokens.append(self.SPECIAL_TOKEN_MAPPING[tag])
                 text = text[match.end() :]
                 continue
 
