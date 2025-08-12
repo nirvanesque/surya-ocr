@@ -617,11 +617,13 @@ class SuryaXLAModel(SuryaModel):
         )
         max_grid_size = get_nearest_pad(
             unpadded_max_grid_size,
+            settings.FOUNDATION_PAD_TO_NEAREST
+            * 4,  # Multiply by 4 since we downsize by a factor of 4 later
         )  # If we need zero padding, we still need to allocate a bit of room for the extra grid_thw
 
         # Always need 2 items in each row batch
         if max_grid_size == unpadded_max_grid_size:
-            max_grid_size += 64
+            max_grid_size += 16
 
         full_image_grid = torch.zeros(
             (valid_batch_size, max_grid_size, pixel_values.shape[-1]),
@@ -681,14 +683,6 @@ class SuryaXLAModel(SuryaModel):
             bbox_size=self.config.image_embed_encoding_multiplier,
         )
         embeddings += encoding_2d
-
-        # Pad to bucket for when we later embed the images into the input sequence
-        pad_size = get_nearest_pad(embeddings.shape[1])
-        if pad_size > 0:
-            embeddings = F.pad(
-                embeddings,
-                (0, 0, pad_size - embeddings.shape[1], 0),
-            )
 
         return embeddings
 

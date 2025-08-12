@@ -369,6 +369,11 @@ def main(
                 print(f"Ref: {ref_line}")
                 print()
 
+    if settings.TORCH_DEVICE == "xla":
+        import torch_xla.debug.metrics as met
+
+        print(met.short_metrics_report())
+
 
 if __name__ == "__main__":
     main()

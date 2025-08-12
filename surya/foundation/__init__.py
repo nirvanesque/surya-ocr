@@ -488,6 +488,8 @@ class FoundationPredictor(BasePredictor):
 
         # Find text lengths of each
         # Oddly, this is optimal on GPU - causes a 30% slowdown if "optimized"
+        # Be very careful with the type and device of this - can cause
+        # a big slowdown if put on device
         is_special = (
             (input_ids.unsqueeze(-1) == self.special_token_ids).any(-1).cpu()
         )  # (batch, seq_len)
@@ -500,9 +502,7 @@ class FoundationPredictor(BasePredictor):
             else:
                 prefix_len = 0
             text_lengths.append(input_ids.shape[1] - prefix_len)
-        text_lengths = torch.tensor(
-            text_lengths, device=self.model.device, dtype=torch.long
-        )
+        text_lengths = torch.tensor(text_lengths, dtype=torch.long)
 
         with settings.INFERENCE_MODE():
             image_embeddings = self.model.get_image_embeddings(
