@@ -57,7 +57,10 @@ class LayoutPredictor(BasePredictor):
                     break
 
                 predicted_label = self.processor.decode([tok], "layout")
-                label = LAYOUT_PRED_RELABEL[predicted_label]
+                label = LAYOUT_PRED_RELABEL.get(predicted_label)
+                if not label:
+                    # Layout can sometimes return unknown labels from other objectives
+                    continue
 
                 top_k_dict = {}
                 for k, v in tok_topk.items():

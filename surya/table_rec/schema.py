@@ -40,7 +40,6 @@ class TableCol(PolygonBox):
 
 class TableResult(BaseModel):
     cells: List[TableCell]
-    unmerged_cells: List[TableCell]
     rows: List[TableRow]
     cols: List[TableCol]
     image_bbox: List[float]

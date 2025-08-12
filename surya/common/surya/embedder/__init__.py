@@ -29,7 +29,7 @@ class SimpleTokenEmbedder(nn.Module):
         token_embeds = self.token_embed(input_tokens)
 
         # Optionally embed boxes
-        if input_boxes is not None and embed_boxes.any():  # Is none in prefill
+        if input_boxes is not None and embed_boxes.cpu().any():  # Is none in prefill
             input_boxes = input_boxes.to(torch.long)
             bbox_loss_ignore_mask = (
                 (input_boxes[:, :, 0] < 0) | (input_boxes[:, :, 0] > self.max_bbox_size)

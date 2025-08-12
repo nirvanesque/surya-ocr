@@ -88,7 +88,7 @@ class InnerOCRTokenizer:
                 tag = match.group(1)
                 tokens.append(
                     self.SPECIAL_TOKEN_MAPPING[tag]
-                )   # Layout tokens are already offset
+                )  # Layout tokens are already offset
                 text = text[match.end() :]
                 continue
 
@@ -286,7 +286,11 @@ class SuryaOCRTokenizer(S3DownloaderMixin, PreTrainedTokenizer):
         task = kwargs.get("task", TaskNames.ocr_with_boxes)
         assert task in TASK_NAMES, f"Invalid task: {task}"
 
-        if task in [TaskNames.ocr_with_boxes, TaskNames.ocr_without_boxes, TaskNames.layout]:
+        if task in [
+            TaskNames.ocr_with_boxes,
+            TaskNames.ocr_without_boxes,
+            TaskNames.layout,
+        ]:
             tokens = self.ocr_tokenizer._tokenize(text)
         else:
             tokens = self.qwen_tokenizer(text)["input_ids"]
@@ -323,7 +327,12 @@ class SuryaOCRTokenizer(S3DownloaderMixin, PreTrainedTokenizer):
         if isinstance(token_ids, (np.ndarray, torch.Tensor)):
             token_ids = token_ids.tolist()
 
-        if task_name in [TaskNames.ocr_with_boxes, TaskNames.ocr_without_boxes, TaskNames.layout]:
+        if task_name in [
+            TaskNames.ocr_with_boxes,
+            TaskNames.ocr_without_boxes,
+            TaskNames.layout,
+            TaskNames.table_structure,
+        ]:
             decoded_text = self.ocr_tokenizer.decode(token_ids)
         else:
             decoded_text = self.qwen_tokenizer.decode(token_ids)

@@ -96,6 +96,11 @@ class FoundationPredictor(BasePredictor):
             "img_size": (1024, 1024),
             "max_tokens": 200,
         },
+        TaskNames.table_structure: {
+            "needs_bboxes": False,
+            "img_size": (1024, 512),
+            "max_tokens": 200,
+        },
     }
 
     def __init__(self, checkpoint=None, device=settings.TORCH_DEVICE_MODEL, dtype=None):
@@ -428,6 +433,7 @@ class FoundationPredictor(BasePredictor):
             device=self.model.device,
             dtype=torch.bool,
         )
+
         batch_input = self.prepare_input(
             task_names=[p.task_name for p in prompts],
             images=[p.image for p in prompts],
@@ -518,7 +524,6 @@ class FoundationPredictor(BasePredictor):
                 text_lengths=text_lengths,
                 valid_batch_size=valid_batch_size,
             )
-            # print(met.short_metrics_report())
 
         # Process outputs
         processed_outputs = self.process_outputs(

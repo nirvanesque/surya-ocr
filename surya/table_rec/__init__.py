@@ -138,10 +138,10 @@ class TableRecPredictor(BasePredictor):
             for col_id in sorted(cell_columns.keys()):
                 is_header = any(cell.is_header for cell in cell_columns[col_id])
                 col_bbox = [
-                    min(cell.polygon.bbox[0] for cell in cell_columns[col_id]),
-                    min(cell.polygon.bbox[1] for cell in cell_columns[col_id]),
-                    max(cell.polygon.bbox[2] for cell in cell_columns[col_id]),
-                    max(cell.polygon.bbox[3] for cell in cell_columns[col_id]),
+                    min(cell.bbox[0] for cell in cell_columns[col_id]),
+                    min(cell.bbox[1] for cell in cell_columns[col_id]),
+                    max(cell.bbox[2] for cell in cell_columns[col_id]),
+                    max(cell.bbox[3] for cell in cell_columns[col_id]),
                 ]
                 col_polygon = [
                     [col_bbox[0], col_bbox[1]],
