@@ -411,6 +411,12 @@ class FoundationPredictor(BasePredictor):
         ]
         non_active_idxs = [k for k, v in self.batch_prompt_mapping.items() if v is None]
         idxs_to_merge = non_active_idxs[: len(prompts)]
+        merge_idx_mask = torch.tensor(
+            [i in idxs_to_merge for i in range(len(self.batch_prompt_mapping))],
+            device=self.model.device,
+            dtype=torch.bool,
+        )
+
         for i, prompt in zip(idxs_to_merge, prompts):
             self.batch_prompt_mapping[i] = prompt.id
 
@@ -462,6 +468,15 @@ class FoundationPredictor(BasePredictor):
             position_ids = self.pad_to_batch_size(
                 position_ids, batch_size=self.kv_cache.max_batch_size
             )
+            needs_bbox_embedding = self.pad_to_batch_size(
+                needs_bbox_embedding, batch_size=self.kv_cache.max_batch_size
+            )
+
+        valid_batch_mask = torch.tensor(
+            [i < valid_batch_size for i in range(input_ids.shape[0])],
+            device=self.model.device,
+            dtype=torch.bool,
+        )
 
         # Find text lengths of each
         # Oddly, this is optimal on GPU - causes a 30% slowdown if "optimized"
@@ -497,12 +512,13 @@ class FoundationPredictor(BasePredictor):
                 past_key_values=self.kv_cache,
                 use_cache=True,
                 encoder_chunk_size=self.get_encoder_chunk_size(),
-                cache_idxs=idxs_to_merge,
+                cache_idxs=merge_idx_mask,
                 prefill=True,
                 num_valid_tokens=None,  # Not required during prefill
                 text_lengths=text_lengths,
                 valid_batch_size=valid_batch_size,
             )
+            # print(met.short_metrics_report())
 
         # Process outputs
         processed_outputs = self.process_outputs(
@@ -522,9 +538,9 @@ class FoundationPredictor(BasePredictor):
         )
 
         self.kv_cache.prefill_attention_mask_update(
-            attention_mask, idxs_to_merge, text_lengths[:valid_batch_size]
+            attention_mask, merge_idx_mask, valid_batch_mask, text_lengths
         )
-        self.kv_cache.update_text_counts(idxs_to_merge, text_lengths[:valid_batch_size])
+        self.kv_cache.update_text_counts(merge_idx_mask, valid_batch_mask, text_lengths)
 
         if current_inputs is None:
             new_seq_len = processed_outputs.input_ids.shape[1]
@@ -562,20 +578,20 @@ class FoundationPredictor(BasePredictor):
             new_seq_len=current_input_ids.shape[1],
         )
 
-        current_input_ids[idxs_to_merge] = input_ids[:valid_batch_size]
-        current_input_boxes[idxs_to_merge] = bbox_preds[:valid_batch_size]
-        current_position_ids[idxs_to_merge] = position_ids[:valid_batch_size]
+        current_input_ids[merge_idx_mask] = input_ids[valid_batch_mask]
+        current_input_boxes[merge_idx_mask] = bbox_preds[valid_batch_mask]
+        current_position_ids[merge_idx_mask] = position_ids[valid_batch_mask]
 
         current_num_valid_tokens = current_inputs.num_valid_tokens
-        current_num_valid_tokens[idxs_to_merge] = num_valid_tokens[:valid_batch_size]
+        current_num_valid_tokens[merge_idx_mask] = num_valid_tokens[valid_batch_mask]
 
         current_num_predicted_tokens = current_inputs.num_predicted_tokens
-        current_num_predicted_tokens[idxs_to_merge] = num_predicted_tokens[
-            :valid_batch_size
+        current_num_predicted_tokens[merge_idx_mask] = num_predicted_tokens[
+            valid_batch_mask
         ]
 
-        current_needs_bbox_embedding[idxs_to_merge] = needs_bbox_embedding[
-            :valid_batch_size
+        current_needs_bbox_embedding[merge_idx_mask] = needs_bbox_embedding[
+            valid_batch_mask
         ]
 
         new_input = ContinuousBatchInput(

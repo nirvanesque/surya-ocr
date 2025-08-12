@@ -55,6 +55,11 @@ class BasePredictor:
         if current_batch_size >= batch_size:
             return tensor
 
+        if len(tensor.shape) == 1:
+            # If tensor is 1D, we need to pad it to the batch size
+            pad_size = batch_size - current_batch_size
+            return F.pad(tensor, (0, pad_size), mode="constant", value=0)
+
         pad_size = batch_size - current_batch_size
         padding = (0, 0) * (tensor.dim() - 1) + (0, pad_size)
 

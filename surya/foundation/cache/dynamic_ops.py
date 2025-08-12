@@ -89,20 +89,27 @@ class DynamicOpsCache:
             cache_kwargs,
         )
 
-    def update_text_counts(self, cache_idxs: List[int], new_text_lens: torch.Tensor):
-        assert len(cache_idxs) == len(new_text_lens)
+    def update_text_counts(
+        self,
+        merge_idx_mask: torch.Tensor,
+        valid_batch_mask: torch.Tensor,
+        new_text_lens: torch.Tensor,
+    ):
         new_text_len_tensor = torch.tensor(
             new_text_lens, dtype=torch.long, device=self.device
         )
         for layer_idx in range(self.num_layers):
-            self.text_token_counts[layer_idx][cache_idxs] = new_text_len_tensor
+            self.text_token_counts[layer_idx][merge_idx_mask] = new_text_len_tensor[
+                valid_batch_mask
+            ]
 
     # Mirrors the logic from _prefill_update
     # Logic is better explained in this funcrtion
     def prefill_attention_mask_update(
         self,
         prefill_attention_mask: torch.Tensor,
-        cache_idxs: List[int],
+        merge_idx_mask: torch.Tensor,
+        valid_batch_mask: torch.Tensor,
         text_lengths: List[int],
     ):
         seq_len = prefill_attention_mask.shape[1]
@@ -110,6 +117,7 @@ class DynamicOpsCache:
         total_cache_len = self.max_cache_len
         prefix_cache_space = total_cache_len - sliding_window
 
+        cache_idxs = merge_idx_mask.cpu().nonzero(as_tuple=True)[0]
         for batch_idx, cache_idx in enumerate(cache_idxs):
             text_len = text_lengths[batch_idx]
             prefix_len = seq_len - text_len
@@ -150,9 +158,9 @@ class DynamicOpsCache:
         text_token_counts: torch.Tensor,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        cache_idxs: List[int] = cache_kwargs.get("cache_idxs", None)
+        cache_idx_mask: List[int] = cache_kwargs.get("cache_idxs", None)
         text_lengths: List[int] = cache_kwargs.get("text_lengths", None)
-        assert cache_idxs is not None, "cache_idxs must be specified during prefill"
+        assert cache_idx_mask is not None, "cache_idxs must be specified during prefill"
         assert text_lengths is not None, "text_lengths must be specified during prefill"
 
         _, _, seq_len, _ = key_states.shape
@@ -160,6 +168,7 @@ class DynamicOpsCache:
         sliding_window = self.text_sliding_window
         prefix_cache_space = total_cache_len - sliding_window
 
+        cache_idxs = cache_idx_mask.cpu().nonzero(as_tuple=True)[0]
         for batch_idx, cache_idx in enumerate(cache_idxs):
             text_len = text_lengths[batch_idx]
             prefix_len = seq_len - text_len

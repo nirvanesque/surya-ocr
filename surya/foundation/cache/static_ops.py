@@ -91,11 +91,6 @@ class StaticOpsCache(DynamicOpsCache):
             cache_kwargs,
         )
 
-    def update_text_counts(self, cache_idxs: List[int], new_text_lens: torch.Tensor):
-        assert len(cache_idxs) == len(new_text_lens)
-        for layer_idx in range(self.num_layers):
-            self.text_token_counts[layer_idx][cache_idxs] = new_text_lens
-
     def _prefill_update(
         self,
         key_cache: torch.Tensor,
@@ -105,22 +100,23 @@ class StaticOpsCache(DynamicOpsCache):
         text_token_counts: torch.Tensor,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        cache_idxs: torch.tensor = cache_kwargs.get("cache_idxs", None)
+        cache_idx_mask: torch.tensor = cache_kwargs.get("cache_idxs", None)
         text_lengths: List[int] = cache_kwargs.get("text_lengths", None)
-        cache_idx_length: int = len(cache_idxs)
-        assert cache_idxs is not None, "cache_idxs must be specified during prefill"
+        assert cache_idx_mask is not None, "cache_idxs must be specified during prefill"
         assert text_lengths is not None, "text_lengths must be specified during prefill"
 
-        cache_idxs = cache_idxs[
-            :cache_idx_length
-        ]  # Ensure we only use the valid indices
+        cache_idx_length = cache_idx_mask.sum()
+        valid_batch_mask = (
+            torch.arange(cache_idx_mask.shape[0], device=cache_idx_mask.device)
+            < cache_idx_length
+        )
 
         # Insert key and value states at the end of the cache
         new_tokens = key_states.shape[2]
 
         # Direct right-aligned assignment
-        key_cache[cache_idxs, :, -new_tokens:] = key_states[:cache_idx_length]
-        value_cache[cache_idxs, :, -new_tokens:] = value_states[:cache_idx_length]
+        key_cache[cache_idx_mask, :, -new_tokens:] = key_states[valid_batch_mask]
+        value_cache[cache_idx_mask, :, -new_tokens:] = value_states[valid_batch_mask]
 
         return key_states, value_states
 
@@ -146,15 +142,18 @@ class StaticOpsCache(DynamicOpsCache):
     def prefill_attention_mask_update(
         self,
         attention_mask: torch.Tensor,
-        cache_idxs: torch.Tensor,
+        merge_idx_mask: torch.Tensor,
+        valid_batch_mask: torch.Tensor,
         text_lengths: List[int],
     ):
         # Set from -(image_length + text_length) to end to 1 for each batch element
         seq_len = attention_mask.shape[1]
-        self.attention_mask[cache_idxs] = (
+        self.attention_mask[merge_idx_mask] = (
             0  # Reset the attention mask for the current batch elements
         )
-        self.attention_mask[cache_idxs, -seq_len:] = attention_mask[: len(cache_idxs)]
+        self.attention_mask[merge_idx_mask, -seq_len:] = attention_mask[
+            valid_batch_mask
+        ]
 
     def _decode_update(
         self,
