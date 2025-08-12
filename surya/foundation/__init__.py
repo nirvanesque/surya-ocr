@@ -73,7 +73,7 @@ class FoundationPredictor(BasePredictor):
     extra_token_count = {
         "xla": 128
     }  # We have to pad the XLA cache since we don't use sliding window
-    min_prefill_ratio: int = 0.8 if settings.FOUNDATION_XLA else 0.2
+    min_prefill_ratio: int = 0.2
     min_trim_length: int = 50
     tasks = {
         TaskNames.ocr_with_boxes: {
@@ -500,16 +500,11 @@ class FoundationPredictor(BasePredictor):
             else:
                 prefix_len = 0
             text_lengths.append(input_ids.shape[1] - prefix_len)
-        text_lengths = torch.tensor(text_lengths, device=self.model.device)
+        text_lengths = torch.tensor(
+            text_lengths, device=self.model.device, dtype=torch.long
+        )
 
         with settings.INFERENCE_MODE():
-            logger.debug(
-                f"Shapes - input_ids: {input_ids.shape}, pixel_values: {image_tiles.shape}, grid_thw: {grid_thw.shape}, attention_mask: {attention_mask.shape}, position_ids: {position_ids.shape}"
-            )
-            logger.debug(
-                f"Other values: valid_batch_size: {valid_batch_size}, merge_idx_mask: {merge_idx_mask.shape}, text_lengths: {text_lengths.shape}, needs_bbox_embedding: {needs_bbox_embedding.shape}"
-            )
-
             image_embeddings = self.model.get_image_embeddings(
                 pixel_values=image_tiles,
                 grid_thw=grid_thw,
@@ -519,7 +514,6 @@ class FoundationPredictor(BasePredictor):
             )
             mark_step()
 
-            logger.debug(f"Image embeddings shape: {image_embeddings.shape}")
             outputs = self.model(
                 input_ids=input_ids,
                 image_embeddings=image_embeddings,

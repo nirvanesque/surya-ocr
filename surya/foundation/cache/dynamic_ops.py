@@ -95,9 +95,8 @@ class DynamicOpsCache:
         valid_batch_mask: torch.Tensor,
         new_text_lens: torch.Tensor,
     ):
-        new_text_len_tensor = new_text_lens.to(dtype=torch.long, device=self.device)
         for layer_idx in range(self.num_layers):
-            self.text_token_counts[layer_idx][merge_idx_mask] = new_text_len_tensor[
+            self.text_token_counts[layer_idx][merge_idx_mask] = new_text_lens[
                 valid_batch_mask
             ]
 
