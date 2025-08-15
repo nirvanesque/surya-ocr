@@ -617,8 +617,6 @@ class SuryaXLAModel(SuryaModel):
         )
         max_grid_size = get_nearest_pad(
             unpadded_max_grid_size,
-            settings.FOUNDATION_PAD_TO_NEAREST
-            * 4,  # Multiply by 4 since we downsize by a factor of 4 later
         )  # If we need zero padding, we still need to allocate a bit of room for the extra grid_thw
 
         # Always need 2 items in each row batch
