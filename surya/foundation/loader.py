@@ -33,12 +33,13 @@ class FoundationModelLoader(ModelLoader):
         if dtype is None:
             # See https://github.com/pytorch/pytorch/issues/118122 - T4 (device version 7.5) will return true since it supports
             # emulated bf16, but falls back to very slow kernels, especially for SDPA
-            if torch.cuda.is_bf16_supported(including_emulation=False):
-                dtype = settings.MODEL_DTYPE_BFLOAT
-            else:
+            dtype = settings.MODEL_DTYPE_BFLOAT
+            if device == "cuda" and not torch.cuda.is_bf16_supported(
+                including_emulation=True
+            ):
+                # If the device is cuda, we check if bf16 is supported, and if not, we use float16
                 dtype = settings.MODEL_DTYPE
 
-        torch.set_float32_matmul_precision("high")
         config = SuryaModelConfig.from_pretrained(self.checkpoint)
 
         if is_flash_attn_2_available() and is_flash_attn_2_supported(device):
