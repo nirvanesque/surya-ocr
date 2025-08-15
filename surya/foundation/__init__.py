@@ -819,6 +819,11 @@ class FoundationPredictor(BasePredictor):
                             ] or (
                                 drop_repeated_tokens
                                 and detect_repeat_token(predicted_tokens[p_idx])
+                                and task_names[p_idx]
+                                in [
+                                    TaskNames.ocr_with_boxes,
+                                    TaskNames.ocr_without_boxes,
+                                ]
                             )
                             if (
                                 token
