@@ -99,7 +99,7 @@ class FoundationPredictor(BasePredictor):
         TaskNames.table_structure: {
             "needs_bboxes": False,
             "img_size": (1024, 512),
-            "max_tokens": 200,
+            "max_tokens": 600,
         },
     }
 
