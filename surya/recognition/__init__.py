@@ -48,6 +48,17 @@ class RecognitionPredictor(BasePredictor):
         self.bbox_size = self.foundation_predictor.model.config.bbox_size
         self.tasks = self.foundation_predictor.tasks
 
+    # Special handling for disable tqdm to pass into foundation predictor
+    # Make sure they are kepy in sync
+    @property
+    def disable_tqdm(self) -> bool:
+        return super().disable_tqdm
+
+    @disable_tqdm.setter
+    def disable_tqdm(self, value: bool) -> None:
+        self._disable_tqdm = bool(value)
+        self.foundation_predictor.disable_tqdm = bool(value)
+
     def detect_and_slice_bboxes(
         self,
         images: List[Image.Image],
