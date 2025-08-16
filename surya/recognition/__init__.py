@@ -361,6 +361,7 @@ class RecognitionPredictor(BasePredictor):
         drop_repeated_text: bool = False,
         max_sliding_window: int | None = None,
         max_tokens: int | None = None,
+        filter_tag_list: List[str] = None
     ) -> List[OCRResult]:
         if task_names is None:
             task_names = [TaskNames.ocr_with_boxes] * len(images)
@@ -503,7 +504,7 @@ class RecognitionPredictor(BasePredictor):
                     text_line = fix_unbalanced_tags(
                         text_line, self.processor.ocr_tokenizer.special_tokens
                     )
-                    text_line = filter_blacklist_tags(text_line)
+                    text_line = filter_blacklist_tags(text_line, filter_tag_list)
                     text = "".join([char.text for char in text_line])
                     text = unwrap_math(text)
                     text = clean_math_tags(text)
