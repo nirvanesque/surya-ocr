@@ -30,6 +30,9 @@ class TableRecModelLoader(ModelLoader):
             device = settings.TORCH_DEVICE_MODEL
         if dtype is None:
             dtype = settings.MODEL_DTYPE
+        if device == "mps":
+            logger.warning("`TableRecEncoderDecoderModel` is not compatible with mps backend. Defaulting to cpu instead")
+            device = "cpu"
 
         config = SuryaTableRecConfig.from_pretrained(self.checkpoint)
         decoder_config = config.decoder
