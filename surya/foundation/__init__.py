@@ -73,7 +73,7 @@ class FoundationPredictor(BasePredictor):
     extra_token_count = {
         "xla": 128
     }  # We have to pad the XLA cache since we don't use sliding window
-    min_prefill_ratio: int = 0.2
+    min_prefill_ratio: int = 1 if settings.FOUNDATION_XLA else 0.2
     min_trim_length: int = 50
     tasks = {
         TaskNames.ocr_with_boxes: {
@@ -417,14 +417,6 @@ class FoundationPredictor(BasePredictor):
         non_active_idxs = [k for k, v in self.batch_prompt_mapping.items() if v is None]
         idxs_to_merge = non_active_idxs[: len(prompts)]
 
-        # Always static shape
-        cache_idxs = [i in idxs_to_merge for i in range(len(self.batch_prompt_mapping))]
-        merge_idx_mask = torch.tensor(
-            cache_idxs,
-            device=self.model.device,
-            dtype=torch.bool,
-        )
-
         for i, prompt in zip(idxs_to_merge, prompts):
             self.batch_prompt_mapping[i] = prompt.id
 
@@ -480,12 +472,6 @@ class FoundationPredictor(BasePredictor):
         position_ids = position_ids.to(device=self.model.device)
         needs_bbox_embedding = needs_bbox_embedding.to(device=self.model.device)
 
-        valid_batch_mask = torch.tensor(
-            [i < valid_batch_size for i in range(input_ids.shape[0])],
-            device=self.model.device,
-            dtype=torch.bool,
-        )
-
         # Find text lengths of each
         # Oddly, this is optimal on GPU - causes a 30% slowdown if "optimized"
         # Be very careful with the type and device of this - can cause
@@ -523,7 +509,7 @@ class FoundationPredictor(BasePredictor):
                 past_key_values=self.kv_cache,
                 use_cache=True,
                 encoder_chunk_size=self.get_encoder_chunk_size(),
-                cache_idxs=merge_idx_mask,
+                cache_idxs=idxs_to_merge,
                 prefill=True,
                 num_valid_tokens=None,  # Not required during prefill
                 text_lengths=text_lengths,
@@ -548,11 +534,14 @@ class FoundationPredictor(BasePredictor):
         )
 
         self.kv_cache.prefill_attention_mask_update(
-            attention_mask, merge_idx_mask, valid_batch_mask, text_lengths
+            attention_mask, idxs_to_merge, valid_batch_size, text_lengths
         )
-        self.kv_cache.update_text_counts(merge_idx_mask, valid_batch_mask, text_lengths)
+        self.kv_cache.update_text_counts(idxs_to_merge, valid_batch_size, text_lengths)
 
-        if current_inputs is None:
+        full_batch = len(idxs_to_merge) == self.kv_cache.max_batch_size
+
+        # If full batch, then we can ignore current_inputs
+        if current_inputs is None or full_batch:
             new_seq_len = processed_outputs.input_ids.shape[1]
             # No padding tokens - So we can safely set position_ids this way
             position_ids = position_ids[:, -1:] + torch.arange(
@@ -588,20 +577,20 @@ class FoundationPredictor(BasePredictor):
             new_seq_len=current_input_ids.shape[1],
         )
 
-        current_input_ids[merge_idx_mask] = input_ids[valid_batch_mask]
-        current_input_boxes[merge_idx_mask] = bbox_preds[valid_batch_mask]
-        current_position_ids[merge_idx_mask] = position_ids[valid_batch_mask]
+        current_input_ids[idxs_to_merge] = input_ids[:valid_batch_size]
+        current_input_boxes[idxs_to_merge] = bbox_preds[:valid_batch_size]
+        current_position_ids[idxs_to_merge] = position_ids[:valid_batch_size]
 
         current_num_valid_tokens = current_inputs.num_valid_tokens
-        current_num_valid_tokens[merge_idx_mask] = num_valid_tokens[valid_batch_mask]
+        current_num_valid_tokens[idxs_to_merge] = num_valid_tokens[:valid_batch_size]
 
         current_num_predicted_tokens = current_inputs.num_predicted_tokens
-        current_num_predicted_tokens[merge_idx_mask] = num_predicted_tokens[
-            valid_batch_mask
+        current_num_predicted_tokens[idxs_to_merge] = num_predicted_tokens[
+            :valid_batch_size
         ]
 
-        current_needs_bbox_embedding[merge_idx_mask] = needs_bbox_embedding[
-            valid_batch_mask
+        current_needs_bbox_embedding[idxs_to_merge] = needs_bbox_embedding[
+            :valid_batch_size
         ]
 
         new_input = ContinuousBatchInput(
@@ -724,7 +713,7 @@ class FoundationPredictor(BasePredictor):
         while self.prompt_queue or self.num_active_slots > 0:
             if (
                 self.num_empty_slots / batch_size
-            ) > self.min_prefill_ratio and self.prompt_queue:
+            ) >= self.min_prefill_ratio and self.prompt_queue:
                 updated_inputs, outputs, merge_idxs = self.prefill(
                     current_inputs, max_lookahead_tokens=max_lookahead_tokens
                 )

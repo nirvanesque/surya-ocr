@@ -100,23 +100,24 @@ class StaticOpsCache(DynamicOpsCache):
         text_token_counts: torch.Tensor,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        cache_idx_mask: torch.tensor = cache_kwargs.get("cache_idxs", None)
+        cache_idxs: torch.tensor = cache_kwargs.get("cache_idxs", None)
         text_lengths: List[int] = cache_kwargs.get("text_lengths", None)
-        assert cache_idx_mask is not None, "cache_idxs must be specified during prefill"
+        assert cache_idxs is not None, "cache_idxs must be specified during prefill"
         assert text_lengths is not None, "text_lengths must be specified during prefill"
 
-        cache_idx_length = cache_idx_mask.sum()
-        valid_batch_mask = (
-            torch.arange(cache_idx_mask.shape[0], device=cache_idx_mask.device)
-            < cache_idx_length
-        )
+        cache_idx_length = len(cache_idxs)
+        full_batch = len(cache_idxs) == self.max_batch_size
 
         # Insert key and value states at the end of the cache
         new_tokens = key_states.shape[2]
 
         # Direct right-aligned assignment
-        key_cache[cache_idx_mask, :, -new_tokens:] = key_states[valid_batch_mask]
-        value_cache[cache_idx_mask, :, -new_tokens:] = value_states[valid_batch_mask]
+        if full_batch:
+            key_cache[:, :, -new_tokens:] = key_states
+            value_cache[:, :, -new_tokens:] = value_states
+        else:
+            key_cache[cache_idxs, :, -new_tokens:] = key_states[:cache_idx_length]
+            value_cache[cache_idxs, :, -new_tokens:] = value_states[:cache_idx_length]
 
         return key_states, value_states
 
@@ -142,18 +143,16 @@ class StaticOpsCache(DynamicOpsCache):
     def prefill_attention_mask_update(
         self,
         attention_mask: torch.Tensor,
-        merge_idx_mask: torch.Tensor,
-        valid_batch_mask: torch.Tensor,
+        merge_idxs: torch.Tensor,
+        valid_batch_size: torch.Tensor,
         text_lengths: List[int],
     ):
         # Set from -(image_length + text_length) to end to 1 for each batch element
         seq_len = attention_mask.shape[1]
-        self.attention_mask[merge_idx_mask] = (
+        self.attention_mask[merge_idxs] = (
             0  # Reset the attention mask for the current batch elements
         )
-        self.attention_mask[merge_idx_mask, -seq_len:] = attention_mask[
-            valid_batch_mask
-        ]
+        self.attention_mask[merge_idxs, -seq_len:] = attention_mask[:valid_batch_size]
 
     def _decode_update(
         self,
@@ -174,16 +173,14 @@ class StaticOpsCache(DynamicOpsCache):
             "`num_valid_tokens` must be provided in `cache_kwargs`"
         )
         # (B, H, L, D)
-        max_valid_tokens = num_valid_tokens.max().item()
 
-        key_cache.copy_(torch.roll(key_cache, -max_valid_tokens, dims=2))
-        value_cache.copy_(torch.roll(value_cache, -max_valid_tokens, dims=2))
+        valid_tokens = key_states.shape[2]
 
-        new_k = key_states[:, :, -max_valid_tokens:, :]
-        new_v = value_states[:, :, -max_valid_tokens:, :]
+        key_cache.copy_(torch.roll(key_cache, -valid_tokens, dims=2))
+        value_cache.copy_(torch.roll(value_cache, -valid_tokens, dims=2))
 
-        key_cache[:, :, -max_valid_tokens:, :] = new_k
-        value_cache[:, :, -max_valid_tokens:, :] = new_v
+        key_cache[:, :, -valid_tokens:, :] = key_states
+        value_cache[:, :, -valid_tokens:, :] = value_states
 
         # In-place edit - Mutates
         text_token_counts += num_valid_tokens

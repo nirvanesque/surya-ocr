@@ -67,6 +67,8 @@ class LayoutPredictor(BasePredictor):
                     topk_label = self.processor.decode([k], "layout")
                     if topk_label in LAYOUT_PRED_RELABEL:
                         topk_label = LAYOUT_PRED_RELABEL[topk_label]
+                    if not topk_label.strip():
+                        continue
                     top_k_dict.update({topk_label: v})
                 layout_boxes.append(
                     LayoutBox(
