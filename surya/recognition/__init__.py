@@ -511,7 +511,8 @@ class RecognitionPredictor(BasePredictor):
                 lines = sort_text_lines(lines)
             predictions_by_image.append(
                 OCRResult(
-                    text_lines=lines, image_bbox=[0, 0, image.size[0], image.size[1]]
+                    text_lines=lines,
+                    image_bbox=[0, 0, image.size[0], image.size[1]],  # Image is PIL
                 )
             )
 

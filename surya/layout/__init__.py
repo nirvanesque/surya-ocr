@@ -81,7 +81,10 @@ class LayoutPredictor(BasePredictor):
                 )
             # layout_boxes = clean_boxes(layout_boxes)
             layout_results.append(
-                LayoutResult(bboxes=layout_boxes, image_bbox=[0, 0, *image.shape])
+                LayoutResult(
+                    bboxes=layout_boxes,
+                    image_bbox=[0, 0, image.shape[1], image.shape[0]],
+                )  # Image is numpy array
             )
 
         assert len(layout_results) == len(images)

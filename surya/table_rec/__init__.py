@@ -160,7 +160,12 @@ class TableRecPredictor(BasePredictor):
                 cells=table_cells,
                 rows=table_rows,
                 cols=columns,
-                image_bbox=[0, 0, *image.shape],
+                image_bbox=[
+                    0,
+                    0,
+                    image.shape[1],
+                    image.shape[0],
+                ],  # Image is numpy array
             )
             table_results.append(result)
 

@@ -215,7 +215,10 @@ class SuryaOCRProcessor(S3DownloaderMixin, ProcessorMixin):
         h_bar = math.ceil(height / factor) * factor
         w_bar = math.ceil(width / factor) * factor
         if h_bar != height or w_bar != width:
-            image = cv2.resize(image, (w_bar, h_bar), interpolation=cv2.INTER_CUBIC)
+            if height == 0 or width == 0:
+                image = np.zeros((h_bar, w_bar, 3), dtype=np.uint8)
+            else:
+                image = cv2.resize(image, (w_bar, h_bar), interpolation=cv2.INTER_CUBIC)
 
         # Handle scaling and normalization
         image = self._image_processor(image)

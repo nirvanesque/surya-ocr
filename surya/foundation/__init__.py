@@ -616,6 +616,7 @@ class FoundationPredictor(BasePredictor):
             current_pixels = H * W
             max_pixels = max_H * max_W
             min_pixels = min_H * min_W
+            current_pixels = max(1, current_pixels)  # Avoid zero division
 
             if current_pixels > max_pixels:
                 scale = (max_pixels / current_pixels) ** 0.5
