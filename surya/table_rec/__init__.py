@@ -31,6 +31,9 @@ class TableRecPredictor(BasePredictor):
         if len(images) == 0:
             return []
 
+        # Set disable_tqdm for the foundation predictor
+        self.foundation_predictor.disable_tqdm = self.disable_tqdm
+
         images = convert_if_not_rgb(images)
         images = [self.processor.image_processor(image) for image in images]
 

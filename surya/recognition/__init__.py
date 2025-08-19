@@ -355,6 +355,12 @@ class RecognitionPredictor(BasePredictor):
         if recognition_batch_size is None:
             recognition_batch_size = self.get_batch_size()
 
+        if len(images) == 0:
+            return []
+
+        # Set disable_tqdm for the foundation predictor
+        self.foundation_predictor.disable_tqdm = self.disable_tqdm
+
         assert len(images) == len(task_names), (
             "You need to pass in one task name for each image"
         )
