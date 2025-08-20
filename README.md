@@ -59,6 +59,7 @@ There is a hosted API for all surya models available [here](https://www.datalab.
 
 Our model weights use a modified AI Pubs Open Rail-M license (free for research, personal use, and startups under $2M funding/revenue) and our code is GPL. For broader commercial licensing or to remove GPL requirements, visit our pricing page [here](https://www.datalab.to/pricing).
 
+
 # Installation
 
 You'll need python 3.10+ and PyTorch. You may need to install the CPU version of torch first if you're not using a Mac or a GPU machine.  See [here](https://pytorch.org/get-started/locally/) for more details.
@@ -130,11 +131,13 @@ Setting the `RECOGNITION_BATCH_SIZE` env var properly will make a big difference
 
 ```python
 from PIL import Image
+from surya.foundation import FoundationPredictor
 from surya.recognition import RecognitionPredictor
 from surya.detection import DetectionPredictor
 
 image = Image.open(IMAGE_PATH)
-recognition_predictor = RecognitionPredictor()
+foundation_predictor = FoundationPredictor()
+recognition_predictor = RecognitionPredictor(foundation_predictor)
 detection_predictor = DetectionPredictor()
 
 predictions = recognition_predictor([image], det_predictor=detection_predictor)
@@ -545,6 +548,25 @@ python benchmark/texify.py --max_rows 128
 Text detection was trained on 4x A6000s for 3 days.  It used a diverse set of images as training data.  It was trained from scratch using a modified efficientvit architecture for semantic segmentation.
 
 Text recognition was trained on 4x A6000s for 2 weeks.  It was trained using a modified donut model (GQA, MoE layer, UTF-16 decoding, layer config changes).
+
+# Finetuning Surya OCR
+You can now take Surya OCR further by training it on your own data with our [finetuning script](/surya/scripts/finetune_ocr.py).
+It’s built on Hugging Face Trainer, and supports all the [arguments](https://huggingface.co/docs/transformers/en/main_classes/trainer#transformers.TrainingArguments) that the huggingface trainer provides, and integrations like torchrun, or deepspeed.
+
+To setup your dataset, follow the example dataset format [here](https://huggingface.co/datasets/datalab-to/ocr_finetune_example) and provide the path to your own dataset when launching the training script.
+```bash
+# Tested on 1xH100 GPU
+# Set --pretrained_checkpoint_path to load from a custom checkpoint, otherwise
+# the default surya ocr weights will be loaded as the initialization
+python surya/scripts/finetune_ocr.py \
+  --output_dir $OUTPUT_DIR \
+  --dataset_name datalab-to/ocr_finetune_example \
+  --per_device_train_batch_size 64 \
+  --gradient_checkpointing true \
+  --max_sequence_length 1024
+```
+
+This is a minimal training script to get you started finetuning Surya. Our internal training stack includes character bounding box finetuning, sliding window attention with specialized attention masks, custom kernels, augmentations, and other optimizations that can push OCR accuracy well beyond standard finetuning. If you want to get the most out of your data, reach us at hi@datalab.to!
 
 # Thanks
 

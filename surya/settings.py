@@ -22,6 +22,7 @@ class Settings(BaseSettings):
         10  # Number of workers for parallel model downloads
     )
     MODEL_CACHE_DIR: str = str(Path(user_cache_dir("datalab")) / "models")
+    LOGLEVEL: str = "INFO"  # Logging level
 
     # Paths
     DATA_DIR: str = "data"
@@ -75,9 +76,12 @@ class Settings(BaseSettings):
     COMPILE_DETECTOR: bool = False
 
     # Text recognition
-    RECOGNITION_MODEL_CHECKPOINT: str = "s3://text_recognition/2025_05_16"
-    RECOGNITION_MODEL_QUANTIZE: bool = False
-    RECOGNITION_MAX_TOKENS: Optional[int] = None
+    FOUNDATION_MODEL_CHECKPOINT: str = "s3://text_recognition/2025_08_12"
+    FOUNDATION_MODEL_QUANTIZE: bool = False
+    FOUNDATION_MAX_TOKENS: Optional[int] = None
+    FOUNDATION_CHUNK_SIZE: Optional[int] = None
+    COMPILE_FOUNDATION: bool = False
+
     RECOGNITION_BATCH_SIZE: Optional[int] = (
         None  # Defaults to 8 for CPU/MPS, 256 otherwise
     )
@@ -105,6 +109,7 @@ class Settings(BaseSettings):
     LAYOUT_BENCH_DATASET_NAME: str = "vikp/publaynet_bench"
     LAYOUT_MAX_BOXES: int = 100
     COMPILE_LAYOUT: bool = False
+    LAYOUT_BENCH_DATASET_NAME: str = "vikp/publaynet_bench"
     ORDER_BENCH_DATASET_NAME: str = "vikp/order_bench"
 
     # Table Rec
@@ -141,6 +146,14 @@ class Settings(BaseSettings):
         return (
             self.COMPILE_ALL or self.COMPILE_LAYOUT or self.TORCH_DEVICE_MODEL == "xla"
         )
+
+    @computed_field
+    def FOUNDATION_STATIC_CACHE(self) -> bool:
+        return (
+            self.COMPILE_ALL
+            or self.COMPILE_FOUNDATION
+            or self.TORCH_DEVICE_MODEL == "xla"
+        )  # We need to static cache and pad to batch size for XLA, since it will recompile otherwise
 
     @computed_field
     def TABLE_REC_STATIC_CACHE(self) -> bool:

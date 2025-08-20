@@ -34,11 +34,29 @@ def download_file(remote_path: str, local_path: str, chunk_size: int = 1024 * 10
         response = requests.get(remote_path, stream=True, allow_redirects=True)
         response.raise_for_status()  # Raise an exception for bad status codes
 
+        # Get file size from headers for progress bar
+        total_size = int(response.headers.get('content-length', 0))
+        
+        # Create progress bar with file name and size info
+        filename = local_path.name
+        pbar = tqdm(
+            total=total_size,
+            unit='B',
+            unit_scale=True,
+            unit_divisor=1024,
+            desc=f"Downloading {filename}",
+            miniters=1
+        )
+
         with open(local_path, "wb") as f:
+            downloaded = 0
             for chunk in response.iter_content(chunk_size=chunk_size):
                 if chunk:
                     f.write(chunk)
-
+                    downloaded += len(chunk)
+                    pbar.update(len(chunk))
+        
+        pbar.close()
         return local_path
     except Exception as e:
         if local_path.exists():
@@ -85,7 +103,8 @@ def download_directory(remote_path: str, local_dir: str):
             manifest = json.load(f)
 
         pbar = tqdm(
-            desc=f"Downloading {model_name} model...", total=len(manifest["files"])
+            desc=f"Downloading {model_name} model to {local_dir}",
+            total=len(manifest["files"]),
         )
 
         with ThreadPoolExecutor(

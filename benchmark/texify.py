@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 
 from surya.common.surya.schema import TaskNames
 from surya.settings import settings
+from surya.foundation import FoundationPredictor
 from surya.recognition import RecognitionPredictor, OCRResult
 import json
 from rapidfuzz.distance import Levenshtein
@@ -38,9 +39,12 @@ def score_text(predictions, references):
     return sum(lev_dist) / len(lev_dist)
 
 
-def inference_texify(source_data, predictor: RecognitionPredictor):
+def inference_texify(
+    source_data, predictor: RecognitionPredictor, line_mode: bool = False
+):
     images = [sd["image"] for sd in source_data]
-    tasks = [TaskNames.block_without_boxes] * len(images)
+    mode = TaskNames.ocr_with_boxes if line_mode else TaskNames.block_without_boxes
+    tasks = [mode] * len(images)
     bboxes = [[[0, 0, image.width, image.height]] for image in images]
     texify_predictions: List[OCRResult] = predictor(images, tasks, bboxes=bboxes)
     out_data = [
@@ -70,15 +74,19 @@ def inference_texify(source_data, predictor: RecognitionPredictor):
 @click.option(
     "--max_rows", type=int, help="Maximum number of images to benchmark.", default=None
 )
-def main(ds_name: str, results_dir: str, max_rows: int):
-    predictor = RecognitionPredictor()
+@click.option(
+    "--line_mode", is_flag=True, help="Use line mode for texify.", default=False
+)
+def main(ds_name: str, results_dir: str, max_rows: int, line_mode: bool):
+    foundation_predictor = FoundationPredictor()
+    predictor = RecognitionPredictor(foundation_predictor)
     ds = datasets.load_dataset(ds_name, split="train")
 
     if max_rows:
         ds = ds.filter(lambda x, idx: idx < max_rows, with_indices=True)
 
     start = time.time()
-    predictions = inference_texify(ds, predictor)
+    predictions = inference_texify(ds, predictor, line_mode)
     time_taken = time.time() - start
 
     text = [p["text"] for p in predictions]
