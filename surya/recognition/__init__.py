@@ -234,8 +234,6 @@ class RecognitionPredictor(BasePredictor):
             past_char_qwen_token = False
 
             def _add_detokenize_sequence(
-                qwen_token: bool,
-                past_char_qwen_token: bool,
                 special_token: bool,
                 past_special_token: bool,
                 force: bool = False,
@@ -243,18 +241,15 @@ class RecognitionPredictor(BasePredictor):
                 nonlocal detokenize_sequence, detokenize_sequences
 
                 if (
-                    qwen_token != past_char_qwen_token
-                    or force
-                    or special_token
+                    special_token
                     or past_special_token
+                    or force
                 ) and detokenize_sequence:
                     chars = [dt[0] for dt in detokenize_sequence]
                     scores = [dt[1] for dt in detokenize_sequence]
                     bboxes = [dt[2] for dt in detokenize_sequence]
 
-                    if past_char_qwen_token:
-                        detokenize_sequences.append((chars, scores, None, "qwen"))
-                    elif past_special_token:
+                    if past_special_token:
                         detokenize_sequences.append((chars, scores, None, "special"))
                     else:
                         detokenize_sequences.append((chars, scores, bboxes, "ocr"))
@@ -270,21 +265,17 @@ class RecognitionPredictor(BasePredictor):
                 ]:
                     break
 
-                qwen_token = char_id < self.processor.ocr_tokenizer.qwen_offset
                 special_token = (
-                    self.processor.ocr_tokenizer.qwen_offset
-                    <= char_id
-                    < self.processor.ocr_tokenizer.special_token_offset
+                    char_id >= self.processor.ocr_tokenizer.ocr_tokenizer.SPECIAL_BASE
                 )
                 _add_detokenize_sequence(
-                    qwen_token, past_char_qwen_token, special_token, past_special_token
+                    special_token, past_special_token
                 )
                 detokenize_sequence.append((char_id, score, bbox))
-                past_char_qwen_token = qwen_token
                 past_special_token = special_token
 
             _add_detokenize_sequence(
-                False, past_char_qwen_token, False, past_special_token, force=True
+                False, past_special_token, force=True
             )
 
             img_chars = []
