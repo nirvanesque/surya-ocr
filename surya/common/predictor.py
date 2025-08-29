@@ -14,8 +14,16 @@ class BasePredictor:
         "mps": 1,
         "cuda": 1
     }
-    disable_tqdm: bool = settings.DISABLE_TQDM
     torch_dtype = settings.MODEL_DTYPE
+
+    @property
+    def disable_tqdm(self) -> bool:
+        return self._disable_tqdm
+
+    @disable_tqdm.setter
+    def disable_tqdm(self, value: bool) -> None:
+        self._disable_tqdm = bool(value)
+
 
     def __init__(self, checkpoint: Optional[str] = None, device: torch.device | str | None = settings.TORCH_DEVICE_MODEL, dtype: Optional[torch.dtype | str] = None):
         if dtype is None:
@@ -27,6 +35,8 @@ class BasePredictor:
 
         self.model = loader.model(device, dtype)
         self.processor = loader.processor()
+
+        self._disable_tqdm = settings.DISABLE_TQDM
 
     def to(self, device_dtype: torch.device | str | None = None):
         if self.model:

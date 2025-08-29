@@ -48,6 +48,17 @@ class RecognitionPredictor(BasePredictor):
         self.bbox_size = self.foundation_predictor.model.config.bbox_size
         self.tasks = self.foundation_predictor.tasks
 
+    # Special handling for disable tqdm to pass into foundation predictor
+    # Make sure they are kepy in sync
+    @property
+    def disable_tqdm(self) -> bool:
+        return super().disable_tqdm
+
+    @disable_tqdm.setter
+    def disable_tqdm(self, value: bool) -> None:
+        self._disable_tqdm = bool(value)
+        self.foundation_predictor.disable_tqdm = bool(value)
+
     def detect_and_slice_bboxes(
         self,
         images: List[Image.Image],
@@ -223,8 +234,6 @@ class RecognitionPredictor(BasePredictor):
             past_char_qwen_token = False
 
             def _add_detokenize_sequence(
-                qwen_token: bool,
-                past_char_qwen_token: bool,
                 special_token: bool,
                 past_special_token: bool,
                 force: bool = False,
@@ -232,18 +241,15 @@ class RecognitionPredictor(BasePredictor):
                 nonlocal detokenize_sequence, detokenize_sequences
 
                 if (
-                    qwen_token != past_char_qwen_token
-                    or force
-                    or special_token
+                    special_token
                     or past_special_token
+                    or force
                 ) and detokenize_sequence:
                     chars = [dt[0] for dt in detokenize_sequence]
                     scores = [dt[1] for dt in detokenize_sequence]
                     bboxes = [dt[2] for dt in detokenize_sequence]
 
-                    if past_char_qwen_token:
-                        detokenize_sequences.append((chars, scores, None, "qwen"))
-                    elif past_special_token:
+                    if past_special_token:
                         detokenize_sequences.append((chars, scores, None, "special"))
                     else:
                         detokenize_sequences.append((chars, scores, bboxes, "ocr"))
@@ -259,21 +265,17 @@ class RecognitionPredictor(BasePredictor):
                 ]:
                     break
 
-                qwen_token = char_id < self.processor.ocr_tokenizer.qwen_offset
                 special_token = (
-                    self.processor.ocr_tokenizer.qwen_offset
-                    <= char_id
-                    < self.processor.ocr_tokenizer.special_token_offset
+                    char_id >= self.processor.ocr_tokenizer.ocr_tokenizer.SPECIAL_BASE
                 )
                 _add_detokenize_sequence(
-                    qwen_token, past_char_qwen_token, special_token, past_special_token
+                    special_token, past_special_token
                 )
                 detokenize_sequence.append((char_id, score, bbox))
-                past_char_qwen_token = qwen_token
                 past_special_token = special_token
 
             _add_detokenize_sequence(
-                False, past_char_qwen_token, False, past_special_token, force=True
+                False, past_special_token, force=True
             )
 
             img_chars = []
@@ -350,6 +352,7 @@ class RecognitionPredictor(BasePredictor):
         drop_repeated_text: bool = False,
         max_sliding_window: int | None = None,
         max_tokens: int | None = None,
+        filter_tag_list: List[str] = None
     ) -> List[OCRResult]:
         if task_names is None:
             task_names = [TaskNames.ocr_with_boxes] * len(images)
@@ -492,7 +495,7 @@ class RecognitionPredictor(BasePredictor):
                     text_line = fix_unbalanced_tags(
                         text_line, self.processor.ocr_tokenizer.special_tokens
                     )
-                    text_line = filter_blacklist_tags(text_line)
+                    text_line = filter_blacklist_tags(text_line, filter_tag_list)
                     text = "".join([char.text for char in text_line])
                     text = unwrap_math(text)
                     text = clean_math_tags(text)
