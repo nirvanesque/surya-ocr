@@ -11,7 +11,6 @@ import math
 from PIL import Image
 from tqdm import tqdm
 import torch.nn.functional as F
-from transformers import QuantizedCacheConfig
 
 from surya.common.surya import SuryaModelOutput
 from surya.common.util import mark_step
@@ -62,7 +61,9 @@ class FoundationPrompt:
 
 class FoundationPredictor(BasePredictor):
     model_loader_cls = FoundationModelLoader
-    batch_size = settings.RECOGNITION_BATCH_SIZE        # Default to the recognition batch size
+    batch_size = (
+        settings.RECOGNITION_BATCH_SIZE
+    )  # Default to the recognition batch size
     torch_dtype = None  # No default, loader picks the dtype based on device properties - bf16/fp16
     default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 128}
     encoder_chunk_size: int = 4096  # Default chunk size
@@ -131,7 +132,7 @@ class FoundationPredictor(BasePredictor):
             max_cache_len,
             text_sliding_window=max_sliding_window,
             device=self.model.device,
-            dtype=self.model.dtype
+            dtype=self.model.dtype,
         )
         self.prompt_queue.clear()
         self.batch_prompt_mapping = {i: None for i in range(batch_size)}
@@ -179,15 +180,20 @@ class FoundationPredictor(BasePredictor):
 
         return batch
 
-    def process_outputs(self, outputs: SuryaModelOutput, max_lookahead_tokens: Optional[int]=None) -> ContinuousBatchOutput:
+    def process_outputs(
+        self, outputs: SuryaModelOutput, max_lookahead_tokens: Optional[int] = None
+    ) -> ContinuousBatchOutput:
         # Predictions are multi-token
         lm_logits = outputs["lm_logits"].float()  # shape: [batch_size, seq_len, V]
         bbox_logits = outputs["bbox_logits"].float()  # shape: [batch_size, seq_len, 6]
 
-        if max_lookahead_tokens is not None and lm_logits.shape[1] > max_lookahead_tokens + 1:
-            lm_logits = lm_logits[:, :max_lookahead_tokens + 1, :]
-            bbox_logits = bbox_logits[:, :max_lookahead_tokens + 1, :]
-        
+        if (
+            max_lookahead_tokens is not None
+            and lm_logits.shape[1] > max_lookahead_tokens + 1
+        ):
+            lm_logits = lm_logits[:, : max_lookahead_tokens + 1, :]
+            bbox_logits = bbox_logits[:, : max_lookahead_tokens + 1, :]
+
         # Get predictions
         preds = torch.argmax(lm_logits, dim=-1)
         input_ids = preds.to(torch.long)
@@ -205,7 +211,7 @@ class FoundationPredictor(BasePredictor):
             preds=preds,
             bbox_preds=box_preds,
             scores=scores,
-            token_probs=token_probs
+            token_probs=token_probs,
         )
 
     # Make space for beacon tokens to be inserted while keeping the same seq len across all batch elements
@@ -213,31 +219,41 @@ class FoundationPredictor(BasePredictor):
     # with the causal mask of flash attention, and we are careful to ignore this pad token when inserting
     # into cache
     def maybe_insert_beacon_tokens(
-        self,
-        input_ids: torch.Tensor,
-        num_predicted_tokens: torch.Tensor
+        self, input_ids: torch.Tensor, num_predicted_tokens: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        batch_size, seq_len = input_ids.shape       # seq_len can be >1 - In case of multi-token predictions
-        
+        batch_size, seq_len = (
+            input_ids.shape
+        )  # seq_len can be >1 - In case of multi-token predictions
+
         # num_predicted tokens **does not include** the current new input_ids, this number is updated **after beacon tokens are inserted**
-        token_positions = num_predicted_tokens + torch.arange(1, seq_len + 1, device=input_ids.device).unsqueeze(0)
-        beacon_positions = (token_positions % self.beacon_token_interval == 0)
+        token_positions = num_predicted_tokens + torch.arange(
+            1, seq_len + 1, device=input_ids.device
+        ).unsqueeze(0)
+        beacon_positions = token_positions % self.beacon_token_interval == 0
 
         # If no beacons needed, return original input
         needs_beacon = beacon_positions.any(dim=1)  # shape: [batch_size]
         if not needs_beacon.any():
-            return input_ids, torch.ones(batch_size, dtype=torch.long, device=input_ids.device) * seq_len
-        
-        beacon_insert_pos = torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
+            return input_ids, torch.ones(
+                batch_size, dtype=torch.long, device=input_ids.device
+            ) * seq_len
+
+        beacon_insert_pos = torch.zeros(
+            batch_size, dtype=torch.long, device=input_ids.device
+        )
         for i in range(batch_size):
             if needs_beacon[i]:
                 # Find first position that needs beacon
                 beacon_insert_pos[i] = torch.where(beacon_positions[i])[0]
-      
+
         # Padded input ids.
-        new_input_ids = torch.full((batch_size, seq_len + 1), self.device_pad_token, 
-                                dtype=input_ids.dtype, device=input_ids.device)
-        
+        new_input_ids = torch.full(
+            (batch_size, seq_len + 1),
+            self.device_pad_token,
+            dtype=input_ids.dtype,
+            device=input_ids.device,
+        )
+
         # Fill in tokens for each sequence
         for i in range(batch_size):
             if needs_beacon[i]:
@@ -245,21 +261,25 @@ class FoundationPredictor(BasePredictor):
                 new_input_ids[i, insert_pos] = self.device_beacon_token
                 if insert_pos > 0:
                     new_input_ids[i, :insert_pos] = input_ids[i, :insert_pos]
-                new_input_ids[i, insert_pos+1:] = input_ids[i, insert_pos:]
+                new_input_ids[i, insert_pos + 1 :] = input_ids[i, insert_pos:]
             else:
                 new_input_ids[i, 1:] = input_ids[i, :]
-        
+
         # Calculate valid token counts for both padded and non padded sequences
         valid_token_counts = torch.where(
-            needs_beacon, 
+            needs_beacon,
             torch.tensor(seq_len + 1, device=input_ids.device),
-            torch.tensor(seq_len, device=input_ids.device)
+            torch.tensor(seq_len, device=input_ids.device),
         )
-        
+
         return new_input_ids, valid_token_counts
 
-    def decode(self, current_inputs: Optional[ContinuousBatchInput] = None, max_lookahead_tokens: Optional[int] = None):
-        # Note - If we want to use the outputs from the non-last token, we 
+    def decode(
+        self,
+        current_inputs: Optional[ContinuousBatchInput] = None,
+        max_lookahead_tokens: Optional[int] = None,
+    ):
+        # Note - If we want to use the outputs from the non-last token, we
         # need to set the cache position manually to ensure causality. The default
         # behavior only works for the last token currently
         input_ids = current_inputs.input_ids
@@ -285,16 +305,22 @@ class FoundationPredictor(BasePredictor):
                 logits_to_keep=1,
             )
 
-        processed_output: ContinuousBatchOutput = self.process_outputs(outputs, max_lookahead_tokens=max_lookahead_tokens)
-        
+        processed_output: ContinuousBatchOutput = self.process_outputs(
+            outputs, max_lookahead_tokens=max_lookahead_tokens
+        )
+
         input_ids = processed_output.input_ids
 
         # Update this **before** inserting beacon tokens
         num_new_tokens = input_ids.shape[1]
         num_predicted_tokens += num_new_tokens
 
-        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
-        position_ids = position_ids[:, -1:] + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
+        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(
+            input_ids, num_predicted_tokens
+        )
+        position_ids = position_ids[:, -1:] + torch.arange(
+            1, input_ids.shape[1] + 1, device=input_ids.device
+        )
         # Some of the input sequences may now have left padding tokens, so we want to account for that
         # offset is a per-batch offset of the position_ids
         offset = (input_ids.shape[1] - num_valid_tokens).unsqueeze(1)
@@ -304,7 +330,7 @@ class FoundationPredictor(BasePredictor):
             input_ids=input_ids,
             position_ids=position_ids,
             num_valid_tokens=num_valid_tokens,
-            num_predicted_tokens=num_predicted_tokens
+            num_predicted_tokens=num_predicted_tokens,
         )
 
         return new_input, processed_output
@@ -325,20 +351,30 @@ class FoundationPredictor(BasePredictor):
         """
         # No padding
         if new_seq_len == input_ids.shape[1]:
-            return input_ids, position_ids[:, -1:] + torch.arange(1, new_seq_len +1, device=self.model.device)
+            return input_ids, position_ids[:, -1:] + torch.arange(
+                1, new_seq_len + 1, device=self.model.device
+            )
 
         pad_len = new_seq_len - input_ids.shape[1]
-        padded_input_ids = torch.nn.functional.pad(input_ids, (pad_len, 0), value=self.device_pad_token)
+        padded_input_ids = torch.nn.functional.pad(
+            input_ids, (pad_len, 0), value=self.device_pad_token
+        )
 
         # Since we have **left padding**, offset the new position_ids by the amount of padding
         # This ensures that the **true tokens** get the correct position_ids
         # The position_ids assigned to pad tokens do not matter. They are not cached, and not used for outputs
-        updated_position_ids = position_ids[:, -1:] + torch.arange(1, new_seq_len + 1, device=self.model.device)
+        updated_position_ids = position_ids[:, -1:] + torch.arange(
+            1, new_seq_len + 1, device=self.model.device
+        )
         updated_position_ids -= pad_len
 
         return padded_input_ids, updated_position_ids
 
-    def prefill(self, current_inputs: Optional[ContinuousBatchInput] = None, max_lookahead_tokens: Optional[int] = None):
+    def prefill(
+        self,
+        current_inputs: Optional[ContinuousBatchInput] = None,
+        max_lookahead_tokens: Optional[int] = None,
+    ):
         logger.debug(f"Prefilling {self.num_empty_slots} slots")
         prompts: List[FoundationPrompt] = [
             self.prompt_queue.popleft()
@@ -358,7 +394,10 @@ class FoundationPredictor(BasePredictor):
             ],  # Pass math mode to the processor
         )
         processed_inputs = self.processor(
-            batch_input, padding_side="left", device=self.model.device, pad_to_multiple=self.pad_to_multiple
+            batch_input,
+            padding_side="left",
+            device=self.model.device,
+            pad_to_multiple=self.pad_to_multiple,
         ).to(device=self.model.device)
 
         input_ids = processed_inputs["input_ids"].to(dtype=torch.long)
@@ -369,12 +408,20 @@ class FoundationPredictor(BasePredictor):
         valid_batch_size = len(idxs_to_merge)
 
         if settings.FOUNDATION_STATIC_CACHE:
-            input_ids = self.pad_to_batch_size(input_ids, batch_size=self.kv_cache.max_batch_size)
-            attention_mask = self.pad_to_batch_size(attention_mask, batch_size=self.kv_cache.max_batch_size)
-            position_ids = self.pad_to_batch_size(position_ids, batch_size=self.kv_cache.max_batch_size)
+            input_ids = self.pad_to_batch_size(
+                input_ids, batch_size=self.kv_cache.max_batch_size
+            )
+            attention_mask = self.pad_to_batch_size(
+                attention_mask, batch_size=self.kv_cache.max_batch_size
+            )
+            position_ids = self.pad_to_batch_size(
+                position_ids, batch_size=self.kv_cache.max_batch_size
+            )
 
         # Find text lengths of each
-        is_special = (input_ids.unsqueeze(-1) == self.special_token_ids).any(-1)  # (batch, seq_len)
+        is_special = (input_ids.unsqueeze(-1) == self.special_token_ids).any(
+            -1
+        )  # (batch, seq_len)
         text_lengths = []
         for i in range(input_ids.shape[0]):
             special_positions = is_special[i].nonzero(as_tuple=True)[0]
@@ -398,25 +445,39 @@ class FoundationPredictor(BasePredictor):
                 encoder_chunk_size=self.get_encoder_chunk_size(),
                 cache_idxs=idxs_to_merge,
                 prefill=True,
-                num_valid_tokens=None,   # Not required during prefill
+                num_valid_tokens=None,  # Not required during prefill
                 text_lengths=text_lengths,
-                logits_to_keep=1
+                logits_to_keep=1,
             )
-        
+
         # Process outputs
-        processed_outputs = self.process_outputs(outputs, max_lookahead_tokens=max_lookahead_tokens)
+        processed_outputs = self.process_outputs(
+            outputs, max_lookahead_tokens=max_lookahead_tokens
+        )
         # Multi-token prediction
         predicted_tokens = processed_outputs.input_ids.shape[1]
-        num_valid_tokens = torch.ones((input_ids.shape[0]), device=self.model.device, dtype=torch.long) * predicted_tokens
-        num_predicted_tokens = torch.ones((input_ids.shape[0], 1), device=self.model.device, dtype=torch.long) * predicted_tokens
+        num_valid_tokens = (
+            torch.ones((input_ids.shape[0]), device=self.model.device, dtype=torch.long)
+            * predicted_tokens
+        )
+        num_predicted_tokens = (
+            torch.ones(
+                (input_ids.shape[0], 1), device=self.model.device, dtype=torch.long
+            )
+            * predicted_tokens
+        )
 
-        self.kv_cache.prefill_attention_mask_update(attention_mask, idxs_to_merge, text_lengths[:valid_batch_size])
+        self.kv_cache.prefill_attention_mask_update(
+            attention_mask, idxs_to_merge, text_lengths[:valid_batch_size]
+        )
         self.kv_cache.update_text_counts(idxs_to_merge, text_lengths[:valid_batch_size])
 
         if current_inputs is None:
             new_seq_len = processed_outputs.input_ids.shape[1]
             # No padding tokens - So we can safely set position_ids this way
-            position_ids = position_ids[:, -1:] + torch.arange(1, new_seq_len + 1, device=position_ids.device)
+            position_ids = position_ids[:, -1:] + torch.arange(
+                1, new_seq_len + 1, device=position_ids.device
+            )
             new_input = ContinuousBatchInput(
                 input_ids=processed_outputs.input_ids,
                 position_ids=position_ids,
@@ -434,9 +495,11 @@ class FoundationPredictor(BasePredictor):
         current_input_ids = current_inputs.input_ids
         current_position_ids = current_inputs.position_ids
 
-        assert(current_input_ids.shape[1] == current_position_ids.shape[1])
+        assert current_input_ids.shape[1] == current_position_ids.shape[1]
         input_ids, position_ids = self.pad_and_shift_input_ids_position_ids(
-            processed_outputs.input_ids, position_ids, new_seq_len=current_input_ids.shape[1]
+            processed_outputs.input_ids,
+            position_ids,
+            new_seq_len=current_input_ids.shape[1],
         )
         current_input_ids[idxs_to_merge] = input_ids[:valid_batch_size]
         current_position_ids[idxs_to_merge] = position_ids[:valid_batch_size]
@@ -445,19 +508,25 @@ class FoundationPredictor(BasePredictor):
         current_num_valid_tokens[idxs_to_merge] = num_valid_tokens[:valid_batch_size]
 
         current_num_predicted_tokens = current_inputs.num_predicted_tokens
-        current_num_predicted_tokens[idxs_to_merge] = num_predicted_tokens[:valid_batch_size]
+        current_num_predicted_tokens[idxs_to_merge] = num_predicted_tokens[
+            :valid_batch_size
+        ]
 
         new_input = ContinuousBatchInput(
             input_ids=current_input_ids,
             position_ids=current_position_ids,
             num_valid_tokens=current_num_valid_tokens,
-            num_predicted_tokens=current_num_predicted_tokens
+            num_predicted_tokens=current_num_predicted_tokens,
         )
 
         return new_input, processed_outputs, idxs_to_merge
 
-    def get_max_image_token_count(self, images: list[np.ndarray], tasks: List[TaskNames]) -> int:
-        def compute_scaled_size(H: int, W: int, max_size: Tuple[int, int]) -> Tuple[int, int]:
+    def get_max_image_token_count(
+        self, images: list[np.ndarray], tasks: List[TaskNames]
+    ) -> int:
+        def compute_scaled_size(
+            H: int, W: int, max_size: Tuple[int, int]
+        ) -> Tuple[int, int]:
             max_W, max_H = max_size
             min_W, min_H = (168, 168)
 
@@ -487,7 +556,9 @@ class FoundationPredictor(BasePredictor):
             H, W = image.shape[:2]
             max_size = self.tasks[task]["img_size"]
             scaled_H, scaled_W = compute_scaled_size(H, W, max_size)
-            token_count = get_tile_count(scaled_H, scaled_W, factor) / (self.processor.merge_size ** 2)
+            token_count = get_tile_count(scaled_H, scaled_W, factor) / (
+                self.processor.merge_size**2
+            )
             max_tokens = max(max_tokens, token_count)
 
         # Extra 10 to account for EOS/BOS/Rotation token etc.
@@ -504,7 +575,7 @@ class FoundationPredictor(BasePredictor):
         math_mode: bool = True,
         drop_repeated_tokens: bool = True,
         max_lookahead_tokens: Optional[int] = None,
-        top_k: int = 0
+        top_k: int = 0,
     ) -> tuple:
         allowed_tasks = self.tasks.keys()
         assert all([task_name in allowed_tasks for task_name in task_names]), (
@@ -517,26 +588,30 @@ class FoundationPredictor(BasePredictor):
 
         if batch_size is None:
             batch_size = self.get_batch_size()
-        
+
         batch_size = min(len(images), batch_size)
         current_inputs = None
-        
+
         max_image_tokens = self.get_max_image_token_count(images, task_names)
         if max_sliding_window is None:
             max_sliding_window = self.model.config.sliding_window
-        self.setup_cache(batch_size, max_cache_len=max_image_tokens + max_sliding_window, max_sliding_window=max_sliding_window)
+        self.setup_cache(
+            batch_size,
+            max_cache_len=max_image_tokens + max_sliding_window,
+            max_sliding_window=max_sliding_window,
+        )
 
         batch_max_tokens = {}
-        for idx, (img, txt, task) in enumerate(
-            zip(images, input_texts, task_names)
-        ):
+        for idx, (img, txt, task) in enumerate(zip(images, input_texts, task_names)):
             self.prompt_queue.append(
                 FoundationPrompt(
                     id=idx, task_name=task, text=txt, image=img, math_mode=math_mode
                 )
             )
             batch_max_tokens[idx] = (
-                max_tokens or settings.FOUNDATION_MAX_TOKENS or self.tasks[task]["max_tokens"]
+                max_tokens
+                or settings.FOUNDATION_MAX_TOKENS
+                or self.tasks[task]["max_tokens"]
             )
 
         overall_max_tokens = max(batch_max_tokens.values())
@@ -554,12 +629,16 @@ class FoundationPredictor(BasePredictor):
             if (
                 self.num_empty_slots / batch_size
             ) > self.min_prefill_ratio and self.prompt_queue:
-                updated_inputs, outputs, merge_idxs = self.prefill(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
+                updated_inputs, outputs, merge_idxs = self.prefill(
+                    current_inputs, max_lookahead_tokens=max_lookahead_tokens
+                )
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 if top_k > 0:
-                    batch_top_k_probs, batch_top_k_indices = torch.topk(outputs.token_probs, k=top_k, dim=-1)
+                    batch_top_k_probs, batch_top_k_indices = torch.topk(
+                        outputs.token_probs, k=top_k, dim=-1
+                    )
                     batch_top_k_probs_cpu = batch_top_k_probs.cpu()
                     batch_top_k_indices_cpu = batch_top_k_indices.cpu()
 
@@ -578,7 +657,11 @@ class FoundationPredictor(BasePredictor):
 
                             if top_k > 0:
                                 top_k_scores = {
-                                    batch_top_k_indices_cpu[temp_idx, t_idx][k].item(): batch_top_k_probs_cpu[temp_idx, t_idx][k].item()
+                                    batch_top_k_indices_cpu[temp_idx, t_idx][
+                                        k
+                                    ].item(): batch_top_k_probs_cpu[temp_idx, t_idx][
+                                        k
+                                    ].item()
                                     for k in range(top_k)
                                 }
                                 topk_probs[p_idx].append(top_k_scores)
@@ -591,11 +674,15 @@ class FoundationPredictor(BasePredictor):
                                 pbar.update(1)
                                 break
             else:
-                updated_inputs, outputs = self.decode(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
+                updated_inputs, outputs = self.decode(
+                    current_inputs, max_lookahead_tokens=max_lookahead_tokens
+                )
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
                 if top_k > 0:
-                    batch_top_k_probs, batch_top_k_indices = torch.topk(outputs.token_probs, k=top_k, dim=-1)
+                    batch_top_k_probs, batch_top_k_indices = torch.topk(
+                        outputs.token_probs, k=top_k, dim=-1
+                    )
                     batch_top_k_probs_cpu = batch_top_k_probs.cpu()
                     batch_top_k_indices_cpu = batch_top_k_indices.cpu()
 
@@ -615,14 +702,20 @@ class FoundationPredictor(BasePredictor):
 
                             if top_k > 0:
                                 top_k_scores = {
-                                    batch_top_k_indices_cpu[temp_idx, t_idx][k].item(): batch_top_k_probs_cpu[temp_idx, t_idx][k].item()
+                                    batch_top_k_indices_cpu[temp_idx, t_idx][
+                                        k
+                                    ].item(): batch_top_k_probs_cpu[temp_idx, t_idx][
+                                        k
+                                    ].item()
                                     for k in range(top_k)
                                 }
                                 topk_probs[p_idx].append(top_k_scores)
 
-                            repeats = (
-                                len(predicted_tokens[p_idx]) >= batch_max_tokens[p_idx]
-                                or (drop_repeated_tokens and detect_repeat_token(predicted_tokens[p_idx]))
+                            repeats = len(predicted_tokens[p_idx]) >= batch_max_tokens[
+                                p_idx
+                            ] or (
+                                drop_repeated_tokens
+                                and detect_repeat_token(predicted_tokens[p_idx])
                             )
                             if (
                                 token
