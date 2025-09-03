@@ -632,7 +632,7 @@ class FoundationPredictor(BasePredictor):
                 self.num_empty_slots / batch_size
             ) > self.min_prefill_ratio and self.prompt_queue:
                 updated_inputs, outputs, merge_idxs = self.prefill(
-                    current_inputs, max_lookahead_tokens=max_lookahead_tokens
+                    current_inputs, max_lookahead_tokens=0
                 )
 
                 predicted_tokens_cpu = outputs.preds.cpu()
@@ -698,10 +698,8 @@ class FoundationPredictor(BasePredictor):
                             # don't use multitoken prediction for lower confidence tokens
                             if t_idx > 0 and num_tokens < seq_len:
                                 # roll so tokens are right aligned
-                                breakpoint()
                                 updated_inputs.input_ids[b_idx] = updated_inputs.input_ids[b_idx].roll(shifts=seq_len - num_tokens, dims=0)
-                                # TODO: does this work for multi-token > 2?
-                                updated_inputs.position_ids[b_idx] = updated_inputs.position_ids[b_idx].roll(shifts=seq_len - num_tokens, dims=0)
+                                # don't need to roll position_ids because that's handled in `decode` (and when we do beacon tokens)
                                 break
 
                             token = predicted_tokens_cpu[b_idx, t_idx].item()
