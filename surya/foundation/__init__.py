@@ -215,7 +215,8 @@ class FoundationPredictor(BasePredictor):
     def maybe_insert_beacon_tokens(
         self,
         input_ids: torch.Tensor,
-        num_predicted_tokens: torch.Tensor
+        num_predicted_tokens: torch.Tensor,
+        num_new_tokens: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len = input_ids.shape       # seq_len can be >1 - In case of multi-token predictions
         
@@ -226,7 +227,9 @@ class FoundationPredictor(BasePredictor):
         # If no beacons needed, return original input
         needs_beacon = beacon_positions.any(dim=1)  # shape: [batch_size]
         if not needs_beacon.any():
-            return input_ids, torch.ones(batch_size, dtype=torch.long, device=input_ids.device) * seq_len
+            if num_new_tokens is None:
+                num_new_tokens = torch.ones(batch_size, dtype=torch.long, device=input_ids.device) * seq_len
+            return input_ids, num_new_tokens.squeeze(1)
         
         beacon_insert_pos = torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
         for i in range(batch_size):
@@ -290,10 +293,15 @@ class FoundationPredictor(BasePredictor):
         input_ids = processed_output.input_ids
 
         # Update this **before** inserting beacon tokens
-        num_new_tokens = input_ids.shape[1]
+        tau = 0.9
+        if max_lookahead_tokens is not None:
+            num_new_tokens = torch.clamp((processed_output.scores.ge(tau).to(torch.long).cumprod(dim=1).sum(dim=1, keepdim=True)), min=1)
+        else:
+            num_new_tokens = input_ids.shape[1]
+
         num_predicted_tokens += num_new_tokens
 
-        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens)
+        input_ids, num_valid_tokens = self.maybe_insert_beacon_tokens(input_ids, num_predicted_tokens, num_new_tokens)
         position_ids = position_ids[:, -1:] + torch.arange(1, input_ids.shape[1] + 1, device=input_ids.device)
         # Some of the input sequences may now have left padding tokens, so we want to account for that
         # offset is a per-batch offset of the position_ids
@@ -554,7 +562,8 @@ class FoundationPredictor(BasePredictor):
             if (
                 self.num_empty_slots / batch_size
             ) > self.min_prefill_ratio and self.prompt_queue:
-                updated_inputs, outputs, merge_idxs = self.prefill(current_inputs, max_lookahead_tokens=max_lookahead_tokens)
+                # No lookahead tokens for prefill
+                updated_inputs, outputs, merge_idxs = self.prefill(current_inputs, max_lookahead_tokens=0)
 
                 predicted_tokens_cpu = outputs.preds.cpu()
                 scores_cpu = outputs.scores.cpu()
@@ -602,9 +611,19 @@ class FoundationPredictor(BasePredictor):
                 for b_idx, p_idx in self.batch_prompt_mapping.items():
                     if p_idx is not None:
                         seq_len = predicted_tokens_cpu.shape[1]
+                        num_tokens = updated_inputs.num_valid_tokens[b_idx].item()
                         should_stop = False
 
                         for t_idx in range(seq_len):
+                            # don't use multitoken prediction for lower confidence tokens
+                            if t_idx > 0 and num_tokens < seq_len:
+                                # roll so tokens are right aligned
+                                breakpoint()
+                                updated_inputs.input_ids[b_idx] = updated_inputs.input_ids[b_idx].roll(shifts=seq_len - num_tokens, dims=0)
+                                # TODO: does this work for multi-token > 2?
+                                updated_inputs.position_ids[b_idx] = updated_inputs.position_ids[b_idx].roll(shifts=seq_len - num_tokens, dims=0)
+                                break
+
                             token = predicted_tokens_cpu[b_idx, t_idx].item()
                             predicted_tokens[p_idx].append(token)
                             batch_bboxes[p_idx, batch_pos[p_idx]] = outputs.bbox_preds[
