@@ -313,7 +313,7 @@ class FoundationPredictor(BasePredictor):
         input_ids = processed_output.input_ids
 
         # Update this **before** inserting beacon tokens
-        tau = 0.9
+        tau = settings.FOUNDATION_MULTI_TOKEN_MIN_CONFIDENCE
         if max_lookahead_tokens is not None:
             num_new_tokens = torch.clamp((processed_output.scores.ge(tau).to(torch.long).cumprod(dim=1).sum(dim=1, keepdim=True)), min=1)
         else:

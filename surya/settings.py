@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     FOUNDATION_MAX_TOKENS: Optional[int] = None
     FOUNDATION_CHUNK_SIZE: Optional[int] = None
     COMPILE_FOUNDATION: bool = False
+    FOUNDATION_MULTI_TOKEN_MIN_CONFIDENCE: float = 0.9
 
     RECOGNITION_BATCH_SIZE: Optional[int] = (
         None  # Defaults to 8 for CPU/MPS, 256 otherwise
