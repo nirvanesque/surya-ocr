@@ -11,6 +11,8 @@ Surya is a document OCR toolkit that does:
 
 It works on a range of documents (see [usage](#usage) and [benchmarks](#benchmarks) for more details).
 
+For our managed API or on-prem document intelligence solution, check out [our platform here](https://datalab.to?utm_source=gh-surya).
+
 
 |                            Detection                             |                                   OCR                                   |
 |:----------------------------------------------------------------:|:-----------------------------------------------------------------------:|
@@ -49,7 +51,7 @@ Surya is named for the [Hindu sun god](https://en.wikipedia.org/wiki/Surya), who
 
 # Hosted API
 
-There is a hosted API for all surya models available [here](https://www.datalab.to/):
+There is a hosted API for all surya models available [here](https://www.datalab.to?utm_source=gh-surya):
 
 - Works with PDF, images, word docs, and powerpoints
 - Consistent speed, with no latency spikes
@@ -57,7 +59,7 @@ There is a hosted API for all surya models available [here](https://www.datalab.
 
 # Commercial usage
 
-Our model weights use a modified AI Pubs Open Rail-M license (free for research, personal use, and startups under $2M funding/revenue) and our code is GPL. For broader commercial licensing or to remove GPL requirements, visit our pricing page [here](https://www.datalab.to/pricing).
+Our model weights use a modified AI Pubs Open Rail-M license (free for research, personal use, and startups under $2M funding/revenue) and our code is GPL. For broader commercial licensing or to remove GPL requirements, visit our pricing page [here](https://www.datalab.to/pricing?utm_source=gh-surya).
 
 
 # Installation
@@ -238,7 +240,7 @@ surya_table DATA_PATH
 - `--images` will save images of the pages and detected table cells + rows and columns (optional)
 - `--output_dir` specifies the directory to save results to instead of the default
 - `--page_range` specifies the page range to process in the PDF, specified as a single number, a comma separated list, a range, or comma separated ranges - example: `0,5-10,20`.
-- `--detect_boxes` specifies if cells should be detected.  By default, they're pulled out of the PDF, but this is not always possible. 
+- `--detect_boxes` specifies if cells should be detected.  By default, they're pulled out of the PDF, but this is not always possible.
 - `--skip_table_detection` tells table recognition not to detect tables first.  Use this if your image is already cropped to a table.
 
 The `results.json` file will contain a json dictionary where the keys are the input filenames without extensions.  Each value will be a list of dictionaries, one per page of the input document.  Each page dictionary contains:
@@ -467,7 +469,7 @@ This inferences texify on a ground truth set of LaTeX, then does edit distance. 
 
 ## Running your own benchmarks
 
-You can benchmark the performance of surya on your machine.  
+You can benchmark the performance of surya on your machine.
 
 - Follow the manual install instructions above.
 - `poetry install --group dev` - installs dev dependencies
