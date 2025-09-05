@@ -432,7 +432,7 @@ class RecognitionPredictor(BasePredictor):
             batch_size=recognition_batch_size,
             math_mode=math_mode,
             drop_repeated_tokens=True,
-            max_lookahead_tokens=0,
+            max_lookahead_tokens=self.foundation_predictor.model.config.multi_output_distance,
             max_sliding_window=max_sliding_window,
             max_tokens=max_tokens,
         )
