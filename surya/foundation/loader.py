@@ -54,7 +54,7 @@ class FoundationModelLoader(ModelLoader):
             config.vision_encoder._attn_implementation = "sdpa"
 
         model = SuryaModel.from_pretrained(
-            self.checkpoint, torch_dtype=dtype, config=config
+            self.checkpoint, dtype=dtype, config=config
         ).to(device)
         model = model.eval()
 
