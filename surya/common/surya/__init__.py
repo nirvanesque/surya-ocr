@@ -79,6 +79,29 @@ class DistanceProjection(nn.Module):
         nn.init.zeros_(self.fc2.bias)
 
 
+class BboxHead(nn.Module):
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        hidden_size = in_features * 2
+        self.in_layer = nn.Linear(in_features, hidden_size)
+        self.proj_layers = nn.ModuleList(
+            [nn.Linear(hidden_size, hidden_size) for _ in range(2)]
+        )
+        self.act = nn.SiLU()
+        self.out_proj = nn.Linear(hidden_size, out_features)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.in_layer(x)
+        x = self.act(x)
+
+        for layer in self.proj_layers:
+            x = layer(x)
+            x = self.act(x)
+
+        x = self.out_proj(x)
+        return x
+
+
 class SuryaModel(S3DownloaderMixin, PreTrainedModel):
     config_class = SuryaModelConfig
     supports_gradient_checkpointing = True
@@ -130,7 +153,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         self.vision_encoder.config = self.config.vision_encoder
         self.decoder.config = self.config.decoder
 
-        self.bbox_head = nn.Linear(config.hidden_size, 6)
+        self.bbox_head = BboxHead(config.hidden_size, 6)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size)
 
         if (
