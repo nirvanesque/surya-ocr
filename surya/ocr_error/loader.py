@@ -34,7 +34,7 @@ class OCRErrorModelLoader(ModelLoader):
         model = (
             DistilBertForSequenceClassification.from_pretrained(
                 self.checkpoint,
-                torch_dtype=dtype,
+                dtype=dtype,
                 config=config,
             )
             .to(device)

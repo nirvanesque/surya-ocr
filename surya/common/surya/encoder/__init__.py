@@ -4,10 +4,10 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.utils import is_flash_attn_2_available
 
+from surya.common.pretrained import SuryaPreTrainedModel
 from surya.common.surya.encoder.config import SuryaEncoderConfig
 from surya.logging import get_logger
 
@@ -472,7 +472,7 @@ Qwen2_5_VL_START_DOCSTRING = r"""
 """
 
 
-class Qwen2_5_VLPreTrainedModel(PreTrainedModel):
+class Qwen2_5_VLPreTrainedModel(SuryaPreTrainedModel):
     config_class = SuryaEncoderConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
