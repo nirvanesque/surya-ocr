@@ -29,12 +29,13 @@ class TableRecEncoderDecoderModel(S3DownloaderMixin, SuryaPreTrainedModel):
         config: Optional[PretrainedConfig] = None,
         encoder: Optional[PreTrainedModel] = None,
         decoder: Optional[PreTrainedModel] = None,
+        **kwargs,
     ):
         # initialize with config
         # make sure input & output embeddings is not tied
         config.tie_word_embeddings = False
         config.decoder.tie_word_embeddings = False
-        super().__init__(config)
+        super().__init__(config, **kwargs)
 
         if encoder is None:
             encoder = DonutSwinModel(config.encoder)

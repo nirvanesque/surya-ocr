@@ -812,7 +812,7 @@ class EfficientViTForSemanticSegmentation(
 
 class EfficientViTForSemanticLayoutSegmentation(EfficientViTPreTrainedModel):
     def __init__(self, config, **kwargs):
-        super().__init__(config)
+        super().__init__(config, **kwargs)
         self.vit = EfficientVitLarge(config)
         self.decode_head = DecodeHead(config)
 

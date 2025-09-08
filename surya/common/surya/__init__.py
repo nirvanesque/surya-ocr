@@ -97,8 +97,9 @@ class SuryaModel(S3DownloaderMixin, SuryaPreTrainedModel):
         embedder: SimpleTokenEmbedder = None,
         vision_encoder: SuryaEncoderModel = None,
         decoder: SuryaDecoderModel = None,
+        **kwargs,
     ):
-        super().__init__(config)
+        super().__init__(config, **kwargs)
 
         if vision_encoder is None:
             vision_encoder = SuryaEncoderModel(config.vision_encoder)

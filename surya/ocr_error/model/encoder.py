@@ -803,8 +803,8 @@ class DistilBertModel(DistilBertPreTrainedModel):
 
 
 class DistilBertForSequenceClassification(S3DownloaderMixin, DistilBertPreTrainedModel):
-    def __init__(self, config: DistilBertConfig):
-        super().__init__(config)
+    def __init__(self, config: DistilBertConfig, **kwargs):
+        super().__init__(config, **kwargs)
         self.num_labels = config.num_labels
         self.config = config
 
