@@ -82,18 +82,13 @@ class DistanceProjection(nn.Module):
 class BboxHead(nn.Module):
     def __init__(self, in_features: int, out_features: int):
         super().__init__()
-        hidden_size = in_features * 2
-        self.in_layer = nn.Linear(in_features, hidden_size)
         self.proj_layers = nn.ModuleList(
-            [nn.Linear(hidden_size, hidden_size) for _ in range(2)]
+            [nn.Linear(in_features, in_features) for _ in range(6)]
         )
         self.act = nn.SiLU()
-        self.out_proj = nn.Linear(hidden_size, out_features)
+        self.out_proj = nn.Linear(in_features, out_features)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.in_layer(x)
-        x = self.act(x)
-
         for layer in self.proj_layers:
             x = layer(x)
             x = self.act(x)
