@@ -14,6 +14,7 @@ from surya.settings import settings
 
 logger = get_logger()
 
+
 class FoundationModelLoader(ModelLoader):
     def __init__(self, checkpoint: Optional[str] = None):
         super().__init__(checkpoint)
@@ -25,6 +26,7 @@ class FoundationModelLoader(ModelLoader):
         self,
         device=settings.TORCH_DEVICE_MODEL,
         dtype=None,
+        attention_implementation: Optional[str] = None,
     ) -> SuryaModel:
         if device is None:
             device = settings.TORCH_DEVICE_MODEL
@@ -35,11 +37,16 @@ class FoundationModelLoader(ModelLoader):
                 dtype = settings.MODEL_DTYPE_BFLOAT
             else:
                 dtype = settings.MODEL_DTYPE
+        elif dtype == torch.float16:
+            dtype = torch.bfloat16  # Model weights in bfloat16
 
         torch.set_float32_matmul_precision("high")
         config = SuryaModelConfig.from_pretrained(self.checkpoint)
 
-        if is_flash_attn_2_available() and is_flash_attn_2_supported(device):
+        if attention_implementation is not None:
+            config.decoder._attn_implementation = attention_implementation
+            config.vision_encoder._attn_implementation = attention_implementation
+        elif is_flash_attn_2_available() and is_flash_attn_2_supported(device):
             config.decoder._attn_implementation = "flash_attention_2"
             config.vision_encoder._attn_implementation = "flash_attention_2"
         else:
@@ -74,7 +81,7 @@ class FoundationModelLoader(ModelLoader):
             merge_size=config.vision_encoder.spatial_merge_size,
             model_device=device,
             num_beacon_tokens=config.num_beacon_tokens,
-            beacon_token_interval=config.beacon_token_interval
+            beacon_token_interval=config.beacon_token_interval,
         )
 
         return processor
