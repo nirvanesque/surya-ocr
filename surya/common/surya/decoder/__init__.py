@@ -21,13 +21,6 @@ from transformers.utils import (
 from surya.common.pretrained import SuryaPreTrainedModel
 from surya.common.surya.decoder.config import SuryaDecoderConfig
 
-from transformers.utils import is_flash_attn_2_available
-
-if is_flash_attn_2_available():
-    from surya.common.surya.flash_attn_utils import (
-        flash_attn_decode,
-        flash_attn_prefill,
-    )
 
 logger = logging.get_logger(__name__)
 
@@ -206,6 +199,12 @@ class Qwen2Attention(nn.Module):
                     'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
                 )
             elif self.config._attn_implementation == "flash_attention_2":
+                # Needed for CPU -> GPU
+                from surya.common.surya.flash_attn_utils import (
+                    flash_attn_decode,
+                    flash_attn_prefill,
+                )
+
                 if prefill:
                     attention_interface = flash_attn_prefill
                 else:

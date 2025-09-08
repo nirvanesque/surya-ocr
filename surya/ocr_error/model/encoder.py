@@ -16,15 +16,10 @@ from transformers.pytorch_utils import (
 )
 
 from transformers.utils import (
-    is_flash_attn_2_available,
     is_flash_attn_greater_or_equal_2_10,
 )
 
 from surya.common.pretrained import SuryaPreTrainedModel
-
-if is_flash_attn_2_available():
-    from flash_attn import flash_attn_func, flash_attn_varlen_func
-    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 
 from surya.common.s3 import S3DownloaderMixin
 from surya.ocr_error.model.config import DistilBertConfig
@@ -342,6 +337,9 @@ class DistilBertFlashAttention2(MultiHeadSelfAttention):
             softmax_scale (`float`, *optional*):
                 The scaling of QK^T before applying softmax. Default to 1 / sqrt(head_dim)
         """
+        from flash_attn import flash_attn_func, flash_attn_varlen_func
+        from flash_attn.bert_padding import pad_input
+
         if not self._flash_attn_uses_top_left_mask:
             causal = self.is_causal
         else:
@@ -397,6 +395,8 @@ class DistilBertFlashAttention2(MultiHeadSelfAttention):
     def _upad_input(
         self, query_layer, key_layer, value_layer, attention_mask, query_length
     ):
+        from flash_attn.bert_padding import index_first_axis, unpad_input
+
         indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(attention_mask)
         batch_size, kv_seq_len, num_key_value_heads, head_dim = key_layer.shape
 

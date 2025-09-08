@@ -17,12 +17,7 @@ from surya.common.surya.embedder import SimpleTokenEmbedder
 from surya.common.surya.encoder import SuryaEncoderModel
 from surya.settings import settings
 
-from transformers.utils import is_flash_attn_2_available
-
 from surya.logging import get_logger
-
-if is_flash_attn_2_available():
-    from surya.common.surya.flash_attn_utils import _get_unpad_data
 
 logger = get_logger()
 
@@ -415,6 +410,9 @@ class SuryaModel(S3DownloaderMixin, SuryaPreTrainedModel):
         # Handling flash attention kwargs outside the decoder to speed up + avoid graph breaks inside the decoder
         # Skipped during decoding since not required
         if self.decoder.config._attn_implementation == "flash_attention_2" and prefill:
+            # Needed for CPU -> GPU
+            from surya.common.surya.flash_attn_utils import _get_unpad_data
+
             batch_size, query_length, _ = inputs_embeds.shape
             indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(
                 attention_mask
