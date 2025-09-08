@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "surya-ocr"
-version = "0.16.5"
+version = "0.16.6"
 description = "OCR, layout, reading order, and table recognition in 90+ languages"
 authors = ["Vik Paruchuri <vik.paruchuri@gmail.com>"]
 readme = "README.md"
@@ -13,7 +13,7 @@ packages = [
 
 [tool.poetry.dependencies]
 python = "^3.10"
-transformers = ">=4.51.2,<4.54.0"
+transformers = ">=4.51.2"
 torch = "^2.7.0"
 pydantic = "^2.5.3"
 pydantic-settings = "^2.1.0"

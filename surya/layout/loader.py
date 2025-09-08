@@ -44,7 +44,7 @@ class LayoutModelLoader(ModelLoader):
         config.encoder = encoder
 
         model = SuryaLayoutModel.from_pretrained(
-            self.checkpoint, config=config, torch_dtype=dtype
+            self.checkpoint, config=config, dtype=dtype
         )
         model = model.to(device)
         model = model.eval()
