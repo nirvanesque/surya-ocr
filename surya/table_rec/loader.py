@@ -24,7 +24,10 @@ class TableRecModelLoader(ModelLoader):
             self.checkpoint = settings.TABLE_REC_MODEL_CHECKPOINT
 
     def model(
-        self, device=settings.TORCH_DEVICE_MODEL, dtype=settings.MODEL_DTYPE
+        self,
+        device=settings.TORCH_DEVICE_MODEL,
+        dtype=settings.MODEL_DTYPE,
+        attention_implementation: Optional[str] = None,
     ) -> TableRecEncoderDecoderModel:
         if device is None:
             device = settings.TORCH_DEVICE_MODEL
@@ -32,7 +35,9 @@ class TableRecModelLoader(ModelLoader):
             dtype = settings.MODEL_DTYPE
 
         if device == "mps":
-            logger.warning("`TableRecEncoderDecoderModel` is not compatible with mps backend. Defaulting to cpu instead")
+            logger.warning(
+                "`TableRecEncoderDecoderModel` is not compatible with mps backend. Defaulting to cpu instead"
+            )
             device = "cpu"
             dtype = "float32"
 

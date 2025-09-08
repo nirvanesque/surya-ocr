@@ -24,7 +24,10 @@ class LayoutModelLoader(ModelLoader):
             self.checkpoint = settings.LAYOUT_MODEL_CHECKPOINT
 
     def model(
-        self, device=settings.TORCH_DEVICE_MODEL, dtype=settings.MODEL_DTYPE
+        self,
+        device=settings.TORCH_DEVICE_MODEL,
+        dtype=settings.MODEL_DTYPE,
+        attention_implementation: Optional[str] = None,
     ) -> SuryaLayoutModel:
         if device is None:
             device = settings.TORCH_DEVICE_MODEL
