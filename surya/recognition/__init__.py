@@ -415,8 +415,11 @@ class RecognitionPredictor(BasePredictor):
                 for im in images
             ]
 
-        # Sort by line widths. Negative so that longer images come first, fits in with continuous batching better
-        sorted_pairs = sorted(enumerate(flat["slices"]), key=lambda x: -x[1].shape[1])
+        # Sort by image sizes. Negative so that longer images come first, fits in with continuous batching better
+        sorted_pairs = sorted(
+            enumerate(flat["slices"]),
+            key=lambda x: -(x[1].shape[0] * x[1].shape[1])  # height * width
+        )
         indices, sorted_slices = zip(*sorted_pairs)
 
         # Reorder input_text and task_names based on the new order
