@@ -5,16 +5,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.activations import ACT2FN
-from transformers.utils import is_flash_attn_2_available
 
 from surya.common.pretrained import SuryaPreTrainedModel
 from surya.common.surya.encoder.config import SuryaEncoderConfig
 from surya.logging import get_logger
-
-if is_flash_attn_2_available():
-    from flash_attn import flash_attn_varlen_func
-    from flash_attn.layers.rotary import apply_rotary_emb  # noqa
-
 
 logger = get_logger()
 
@@ -127,6 +121,8 @@ class Qwen2_5_VLPatchMerger(nn.Module):
 def apply_rotary_pos_emb_flashatt(
     q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    from flash_attn.layers.rotary import apply_rotary_emb
+
     cos = cos.chunk(2, dim=-1)[0].contiguous()
     sin = sin.chunk(2, dim=-1)[0].contiguous()
     q_embed = apply_rotary_emb(q.float(), cos.float(), sin.float()).type_as(q)
@@ -148,6 +144,8 @@ class Qwen2_5_VLVisionFlashAttention2(nn.Module):
         rotary_pos_emb: Optional[torch.Tensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
+        from flash_attn import flash_attn_varlen_func
+
         bsz = hidden_states.shape[0]
         seq_length = hidden_states.shape[1]
         q, k, v = (
