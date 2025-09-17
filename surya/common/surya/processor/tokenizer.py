@@ -278,7 +278,7 @@ class GreedyMathUTF16Tokenizer(PreTrainedTokenizer):
         b = bytearray()
         for u in units:
             b += int(u).to_bytes(2, "little")
-        return b.decode("utf-16le", errors="strict")
+        return b.decode("utf-16le", errors="ignore")
 
     class _TrieNode:
         __slots__ = ("child", "id", "leaf")
