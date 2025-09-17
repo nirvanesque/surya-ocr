@@ -4,7 +4,9 @@ import re
 from typing import List
 
 import numpy as np
+import torch
 from PIL import Image
+import torch.nn.functional as F
 
 from surya.common.polygon import PolygonBox
 from surya.common.surya.processor import NOMATH_TOKEN
@@ -24,7 +26,7 @@ from surya.recognition.util import (
     unwrap_math,
     clean_math_tags,
     filter_blacklist_tags,
-    words_from_chars,
+    words_from_chars
 )
 from surya.foundation.util import detect_repeat_token, prediction_to_polygon_batch
 from surya.recognition.schema import TextLine, OCRResult, TextChar
@@ -35,10 +37,9 @@ from surya.logging import get_logger, configure_logging
 configure_logging()
 logger = get_logger()
 
-
 class RecognitionPredictor(BasePredictor):
     batch_size = settings.RECOGNITION_BATCH_SIZE
-    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 64}
+    default_batch_sizes = {"cpu": 32, "mps": 64, "cuda": 256, "xla": 128}
 
     # Override base init - Do not load model
     def __init__(self, foundation_predictor: FoundationPredictor):
@@ -46,6 +47,17 @@ class RecognitionPredictor(BasePredictor):
         self.processor = self.foundation_predictor.processor
         self.bbox_size = self.foundation_predictor.model.config.bbox_size
         self.tasks = self.foundation_predictor.tasks
+
+    # Special handling for disable tqdm to pass into foundation predictor
+    # Make sure they are kepy in sync
+    @property
+    def disable_tqdm(self) -> bool:
+        return super().disable_tqdm
+
+    @disable_tqdm.setter
+    def disable_tqdm(self, value: bool) -> None:
+        self._disable_tqdm = bool(value)
+        self.foundation_predictor.disable_tqdm = bool(value)
 
     def detect_and_slice_bboxes(
         self,
@@ -219,6 +231,7 @@ class RecognitionPredictor(BasePredictor):
 
             detokenize_sequences = []
             detokenize_sequence = []
+            past_char_qwen_token = False
 
             def _add_detokenize_sequence(
                 special_token: bool,
@@ -339,17 +352,12 @@ class RecognitionPredictor(BasePredictor):
         drop_repeated_text: bool = False,
         max_sliding_window: int | None = None,
         max_tokens: int | None = None,
+        filter_tag_list: List[str] = None
     ) -> List[OCRResult]:
         if task_names is None:
             task_names = [TaskNames.ocr_with_boxes] * len(images)
         if recognition_batch_size is None:
             recognition_batch_size = self.get_batch_size()
-
-        if len(images) == 0:
-            return []
-
-        # Set disable_tqdm for the foundation predictor
-        self.foundation_predictor.disable_tqdm = self.disable_tqdm
 
         assert len(images) == len(task_names), (
             "You need to pass in one task name for each image"
@@ -401,12 +409,17 @@ class RecognitionPredictor(BasePredictor):
         # No images passed, or no boxes passed, or no text detected in the images
         if len(flat["slices"]) == 0:
             return [
-                OCRResult(text_lines=[], image_bbox=[0, 0, im.size[0], im.size[1]])
+                OCRResult(
+                    text_lines=[], image_bbox=[0, 0, im.size[0], im.size[1]]
+                )
                 for im in images
             ]
 
-        # Sort by line widths. Negative so that longer images come first, fits in with continuous batching better
-        sorted_pairs = sorted(enumerate(flat["slices"]), key=lambda x: -x[1].shape[1])
+        # Sort by image sizes. Negative so that longer images come first, fits in with continuous batching better
+        sorted_pairs = sorted(
+            enumerate(flat["slices"]),
+            key=lambda x: -(x[1].shape[0] * x[1].shape[1])  # height * width
+        )
         indices, sorted_slices = zip(*sorted_pairs)
 
         # Reorder input_text and task_names based on the new order
@@ -415,18 +428,16 @@ class RecognitionPredictor(BasePredictor):
         flat["task_names"] = [flat["task_names"][i] for i in indices]
 
         # Make predictions
-        predicted_tokens, batch_bboxes, scores, _ = (
-            self.foundation_predictor.prediction_loop(
-                images=flat["slices"],
-                input_texts=flat["input_text"],
-                task_names=flat["task_names"],
-                batch_size=recognition_batch_size,
-                math_mode=math_mode,
-                drop_repeated_tokens=True,
-                max_lookahead_tokens=0,
-                max_sliding_window=max_sliding_window,
-                max_tokens=max_tokens,
-            )
+        predicted_tokens, batch_bboxes, scores, _ = self.foundation_predictor.prediction_loop(
+            images=flat["slices"],
+            input_texts=flat["input_text"],
+            task_names=flat["task_names"],
+            batch_size=recognition_batch_size,
+            math_mode=math_mode,
+            drop_repeated_tokens=True,
+            max_lookahead_tokens=self.foundation_predictor.model.config.multi_output_distance,
+            max_sliding_window=max_sliding_window,
+            max_tokens=max_tokens,
         )
 
         # Get text and bboxes in structured form
@@ -487,7 +498,7 @@ class RecognitionPredictor(BasePredictor):
                     text_line = fix_unbalanced_tags(
                         text_line, self.processor.ocr_tokenizer.special_tokens
                     )
-                    text_line = filter_blacklist_tags(text_line)
+                    text_line = filter_blacklist_tags(text_line, filter_tag_list)
                     text = "".join([char.text for char in text_line])
                     text = unwrap_math(text)
                     text = clean_math_tags(text)
@@ -507,8 +518,7 @@ class RecognitionPredictor(BasePredictor):
                 lines = sort_text_lines(lines)
             predictions_by_image.append(
                 OCRResult(
-                    text_lines=lines,
-                    image_bbox=[0, 0, image.size[0], image.size[1]],  # Image is PIL
+                    text_lines=lines, image_bbox=[0, 0, image.size[0], image.size[1]]
                 )
             )
 

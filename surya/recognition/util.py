@@ -29,22 +29,22 @@ def unwrap_math(text: str) -> str:
 
 MATH_BLOCK = re.compile(r"(<math\b[^>]*>)(.*?)</math>", flags=re.I | re.S)
 STRIP_TAGS = re.compile(r"</?(?:br|u|del|mark|i|b|sup|sub)\b[^>]*>", flags=re.I | re.S)
-BLACKLIST_TAGS = {"p", "li", "ul", "ol", "table", "td", "tr", "th"}
+DEFAULT_TAGS_TO_FILTER = ["p", "li", "ul", "ol", "table", "td", "tr", "th", "tbody", "pre"]
 
-def filter_blacklist_tags(text_chars: List[TextChar]) -> List[TextChar]:
+def filter_blacklist_tags(text_chars: List[TextChar], tags_to_filter: List[str] = None) -> List[TextChar]:
     filtered_chars = []
     char_buffer = []
     in_tag = False
+    if tags_to_filter is None:
+        tags_to_filter = DEFAULT_TAGS_TO_FILTER
 
     for text_char in text_chars:
         char = text_char.text
 
-        if char == "<":
+        if char.startswith("<") or in_tag:
             in_tag = True
-            char_buffer = [text_char]
-        elif in_tag:
             char_buffer.append(text_char)
-            if char == ">":
+            if char.endswith(">"):
                 full_tag = ''.join(c.text for c in char_buffer)
                 inner = full_tag[1:-1].strip()  # remove < >
                 inner = inner.strip("/")  # remove '/'
@@ -57,7 +57,7 @@ def filter_blacklist_tags(text_chars: List[TextChar]) -> List[TextChar]:
                     continue
                 
                 tag_name_candidate = inner.split()[0]   # remove any attributes
-                if tag_name_candidate in BLACKLIST_TAGS:
+                if tag_name_candidate in tags_to_filter:
                     # Discard tag
                     pass
                 else:
