@@ -44,6 +44,8 @@ class LayoutPredictor(BasePredictor):
                 batch_size=batch_size,
                 max_lookahead_tokens=0,  # Do not do MTP for layout
                 top_k=5,
+                max_sliding_window=576,
+                max_tokens=500
             )
         )
 
