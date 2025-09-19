@@ -76,12 +76,13 @@ class Settings(BaseSettings):
     COMPILE_DETECTOR: bool = False
 
     # Text recognition
-    FOUNDATION_MODEL_CHECKPOINT: str = "s3://text_recognition/2025_08_05"
+    FOUNDATION_MODEL_CHECKPOINT: str = "s3://text_recognition/2025_08_29"
     FOUNDATION_MODEL_QUANTIZE: bool = False
     FOUNDATION_MAX_TOKENS: Optional[int] = None
     FOUNDATION_CHUNK_SIZE: Optional[int] = None
     FOUNDATION_PAD_TO_NEAREST: int = 256
     COMPILE_FOUNDATION: bool = False
+    FOUNDATION_MULTI_TOKEN_MIN_CONFIDENCE: float = 0.9
 
     RECOGNITION_BATCH_SIZE: Optional[int] = (
         None  # Defaults to 8 for CPU/MPS, 256 otherwise

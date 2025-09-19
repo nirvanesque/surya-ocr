@@ -393,8 +393,7 @@ class DynamicOpsCache:
 
         return key_cache, value_cache
 
-    # The attention mask managed by our kv cache automatically masks the tokens
-    # in the cache, so we can return full length for HF to use in other places
-    # This is mainly utilized in the cache_positions creation
+    # We have a non-uniform cache, so its better to not return it and handle any logic
+    # that requires this ourselves
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-        return self.max_cache_len
+        raise NotImplementedError()

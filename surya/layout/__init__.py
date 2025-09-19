@@ -22,6 +22,17 @@ class LayoutPredictor(BasePredictor):
         self.bbox_size = self.foundation_predictor.model.config.bbox_size
         self.tasks = self.foundation_predictor.tasks
 
+    # Special handling for disable tqdm to pass into foundation predictor
+    # Make sure they are kept in sync
+    @property
+    def disable_tqdm(self) -> bool:
+        return super().disable_tqdm
+
+    @disable_tqdm.setter
+    def disable_tqdm(self, value: bool) -> None:
+        self._disable_tqdm = bool(value)
+        self.foundation_predictor.disable_tqdm = bool(value)
+
     def __call__(
         self, images: List[Image.Image], batch_size: int | None = None, top_k: int = 5
     ) -> List[LayoutResult]:
@@ -29,9 +40,6 @@ class LayoutPredictor(BasePredictor):
 
         if len(images) == 0:
             return []
-
-        # Set disable_tqdm for the foundation predictor
-        self.foundation_predictor.disable_tqdm = self.disable_tqdm
 
         images = convert_if_not_rgb(images)
         images = [self.processor.image_processor(image) for image in images]

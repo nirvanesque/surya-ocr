@@ -12,20 +12,15 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
 )
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.processing_utils import Unpack
 from transformers.utils import (
     logging,
 )
+
+from surya.common.pretrained import SuryaPreTrainedModel
 from surya.common.surya.decoder.config import SuryaDecoderConfig
 
-from transformers.utils import is_flash_attn_2_available
-
-if is_flash_attn_2_available():
-    from surya.common.surya.flash_attn_utils import (
-        flash_attn_decode,
-        flash_attn_prefill,
-    )
 
 logger = logging.get_logger(__name__)
 
@@ -180,7 +175,7 @@ class Qwen2Attention(nn.Module):
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            # cache_idxs, num_valid_tokens, and prefill add support for our new caching mechanism 
+            # cache_idxs, num_valid_tokens, and prefill add support for our new caching mechanism
             cache_kwargs = {
                 "sin": sin,
                 "cos": cos,
@@ -188,7 +183,7 @@ class Qwen2Attention(nn.Module):
                 "cache_idxs": cache_idxs,
                 "num_valid_tokens": num_valid_tokens,
                 "prefill": prefill,
-                "text_lengths": text_lengths
+                "text_lengths": text_lengths,
             }
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
@@ -204,6 +199,12 @@ class Qwen2Attention(nn.Module):
                     'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
                 )
             elif self.config._attn_implementation == "flash_attention_2":
+                # Needed for CPU -> GPU
+                from surya.common.surya.flash_attn_utils import (
+                    flash_attn_decode,
+                    flash_attn_prefill,
+                )
+
                 if prefill:
                     attention_interface = flash_attn_prefill
                 else:
@@ -406,7 +407,7 @@ class Qwen2RotaryEmbedding(nn.Module):
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
-class Qwen2PreTrainedModel(PreTrainedModel):
+class Qwen2PreTrainedModel(SuryaPreTrainedModel):
     config_class = SuryaDecoderConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
@@ -482,22 +483,18 @@ class SuryaDecoderModel(Qwen2PreTrainedModel):
         )
 
         if inputs_embeds is None:
-            raise ValueError(
-                "You must specify inputs_embeds"
-            )
+            raise ValueError("You must specify inputs_embeds")
 
         if cache_position is None:
-            raise ValueError(
-                "You must specify cache_position"
-            )
+            raise ValueError("You must specify cache_position")
 
         if position_ids is None:
-            raise ValueError(
-                "You must specify position_ids"
-            )
+            raise ValueError("You must specify position_ids")
 
         hidden_states = inputs_embeds
-        causal_mask = attention_mask        # We make the 4D mask in the combined model when needed
+        causal_mask = (
+            attention_mask  # We make the 4D mask in the combined model when needed
+        )
 
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)

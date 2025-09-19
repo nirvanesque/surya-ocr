@@ -5,11 +5,13 @@ import torch.utils.checkpoint
 from torch import nn
 from transformers import PretrainedConfig
 
-from transformers import PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.modeling_outputs import BaseModelOutputWithNoAttention
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+
+from surya.common.pretrained import SuryaPreTrainedModel
+from surya.common.xla import mark_step
 
 _MAX_SQRT_GRADIENT = 1000.0
 
@@ -552,7 +554,7 @@ class SuryaADETRDecoderLayer(nn.Module):
         return hidden_states
 
 
-class SuryaADETRDecoderPreTrainedModel(PreTrainedModel):
+class SuryaADETRDecoderPreTrainedModel(SuryaPreTrainedModel):
     config_class = PretrainedConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True

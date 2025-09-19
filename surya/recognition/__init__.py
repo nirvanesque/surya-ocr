@@ -49,7 +49,7 @@ class RecognitionPredictor(BasePredictor):
         self.tasks = self.foundation_predictor.tasks
 
     # Special handling for disable tqdm to pass into foundation predictor
-    # Make sure they are kepy in sync
+    # Make sure they are kept in sync
     @property
     def disable_tqdm(self) -> bool:
         return super().disable_tqdm

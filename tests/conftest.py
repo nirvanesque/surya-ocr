@@ -81,3 +81,10 @@ def test_image_tall():
         font_size=24,
     )
     return image
+
+@pytest.fixture()
+def test_image_latex():
+    assets_dir = os.path.join(os.path.dirname(__file__), "assets")
+    img_path = os.path.join(assets_dir, "test_latex.png")
+    image = Image.open(img_path).convert("RGB")
+    return image

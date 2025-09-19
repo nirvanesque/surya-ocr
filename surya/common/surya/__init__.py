@@ -5,11 +5,11 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 import torch.nn.functional as F
-from transformers import PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.cache_utils import Cache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 
+from surya.common.pretrained import SuryaPreTrainedModel
 from surya.common.s3 import S3DownloaderMixin
 from surya.common.surya.config import SuryaModelConfig
 from surya.common.surya.decoder import SuryaDecoderModel
@@ -19,12 +19,7 @@ from surya.common.util import pad_to_batch_size, pad_to_batch_size_repeat
 from surya.common.xla import get_nearest_pad
 from surya.settings import settings
 
-from transformers.utils import is_flash_attn_2_available
-
 from surya.logging import get_logger
-
-if is_flash_attn_2_available():
-    from surya.common.surya.flash_attn_utils import _get_unpad_data
 
 logger = get_logger()
 
@@ -97,7 +92,7 @@ class BboxHead(nn.Module):
         return x
 
 
-class SuryaModel(S3DownloaderMixin, PreTrainedModel):
+class SuryaModel(S3DownloaderMixin, SuryaPreTrainedModel):
     config_class = SuryaModelConfig
     supports_gradient_checkpointing = True
     _skip_keys_device_placement = ["past_key_values"]
@@ -117,8 +112,9 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         embedder: SimpleTokenEmbedder = None,
         vision_encoder: SuryaEncoderModel = None,
         decoder: SuryaDecoderModel = None,
+        **kwargs,
     ):
-        super().__init__(config)
+        super().__init__(config, **kwargs)
 
         if vision_encoder is None:
             vision_encoder = SuryaEncoderModel(config.vision_encoder)
@@ -401,6 +397,9 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         self,
         input_ids=None,
         image_embeddings=None,
+        labels=None,
+        image_tiles=None,
+        grid_thw=None,
         inputs_embeds=None,
         attention_mask=None,
         position_ids=None,
@@ -409,30 +408,44 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         output_hidden_states=False,
         output_attentions=False,
         use_cache=False,
-        encoder_chunk_size=None,
+        encoder_chunk_size=32768,
         cache_idxs=None,
         num_valid_tokens=None,
-        prefill=False,
+        prefill=True,
         text_lengths=None,
         valid_batch_size: torch.Tensor = None,
         input_boxes=None,
         embed_boxes=None,
+        logits_to_keep=None,
         **kwargs: KwargsForCausalLM,
     ):
-        # Process the mixed batch if provided
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_ids_boxes_images(
-                input_ids,
-                image_embeddings,
-                encoder_chunk_size,
-                valid_batch_size,
-                input_boxes,
-                embed_boxes,
+        if any([
+            input_ids is None,
+            position_ids is None,
+            cache_position is None,
+            (
+                prefill
+                and not (
+                    (image_tiles is not None and grid_thw is not None)
+                    or image_embeddings is not None
+                )
+            ),
+        ]):
+            raise ValueError(
+                "`input_ids`, `position_ids`, and `cache_position` **must** be specified. "
+                "For prefill, you must provide either (`image_tiles` and `grid_thw`) or `image_embeddings`."
             )
+
+
+        inputs_embeds = self.embed_ids_boxes_images(
+            input_ids, image_embeddings, encoder_chunk_size, valid_batch_size, input_boxes, embed_boxes
+        )
 
         # Handling flash attention kwargs outside the decoder to speed up + avoid graph breaks inside the decoder
         # Skipped during decoding since not required
         if self.decoder.config._attn_implementation == "flash_attention_2" and prefill:
+            # Needed for CPU -> GPU
+            from surya.common.surya.flash_attn_utils import _get_unpad_data
             batch_size, query_length, _ = inputs_embeds.shape
             indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(
                 attention_mask
@@ -442,19 +455,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             kwargs["indices_k"] = indices_k
             kwargs["cu_seqlens_k"] = cu_seqlens_k
             kwargs["max_seqlen_in_batch_k"] = max_seqlen_in_batch_k
-
-        if cache_position is None:
-            past_seen_tokens = (
-                past_key_values.get_seq_length() if past_key_values is not None else 0
-            )
-            cache_position = torch.arange(
-                past_seen_tokens,
-                past_seen_tokens + inputs_embeds.shape[1],
-                device=inputs_embeds.device,
-            )
-
-        if position_ids is None:
-            position_ids = cache_position.unsqueeze(0)
 
         causal_mask = self._update_causal_mask(
             attention_mask,
@@ -481,12 +481,25 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         )
 
         hidden_states = outputs.last_hidden_state
-        # Only keep the last `logits_to_keep` logits, should bring down memory usage during inference
-        hidden_states = hidden_states[:, -1:, :]
+        if logits_to_keep is not None:
+            hidden_states = hidden_states[:, -logits_to_keep:, :]
         hidden_states = hidden_states.contiguous()
-        lm_logits, bbox_logits = self.get_logits(hidden_states)
+
+        loss = None
+        if labels is not None:
+            # Training, return full logits
+            lm_logits = self.lm_head(hidden_states)
+            bbox_logits = None
+            vocab_size = lm_logits.shape[-1]
+            labels = torch.roll(labels, shifts=-1, dims=-1)
+            loss = F.cross_entropy(
+                lm_logits.view(-1, vocab_size), labels.view(-1), reduction="mean"
+            )
+        else:
+            lm_logits, bbox_logits = self.get_logits(hidden_states)
 
         return SuryaModelOutput(
+            loss=loss,
             bbox_logits=bbox_logits,
             lm_logits=lm_logits,
             hidden_states=outputs.hidden_states if output_hidden_states else None,
@@ -505,13 +518,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         if self.decoder.config._attn_implementation == "flash_attention_2":
             return attention_mask
 
-        # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
-        # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
-        # to infer the attention mask.
-        past_seen_tokens = (
-            past_key_values.get_seq_length() if past_key_values is not None else 0
-        )
-
         # We always pass in a 2D attention mask from the processor - In both static and dynamic cache cases
         dtype, device = input_tensor.dtype, input_tensor.device
         min_dtype = torch.finfo(dtype).min
@@ -519,7 +525,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
         target_length = (
             attention_mask.shape[-1]
             if isinstance(attention_mask, torch.Tensor)
-            else past_seen_tokens + sequence_length + 1
+            else past_key_values.max_cache_len
         )
 
         # In case the provided `attention` mask is 2D, we generate a causal mask here (4D).
@@ -578,7 +584,7 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
             device (`torch.device`):
                 The device to plcae the 4D attention mask on.
             cache_position (`torch.Tensor`):
-                Indices depicting the position of the input sequence tokens in the sequence.
+                Indices depicting the position of the input sequence tokens in the sequence. Shape `(batch_size, sequence_length)`.
             batch_size (`torch.Tensor`):
                 Batch size.
             config (`Qwen2Config`):
@@ -597,12 +603,16 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                 dtype=dtype,
                 device=device,
             )
-            diagonal_attend_mask = torch.arange(
-                target_length, device=device
-            ) > cache_position.reshape(-1, 1)
-            # NOTE - Removed sliding window handling here from original impl. since we manage it differently
-            causal_mask *= diagonal_attend_mask
-            causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
+            # Batch-aware diagonal attend mask
+            diagonal_attend_mask = torch.arange(target_length, device=device).unsqueeze(
+                0
+            ) > cache_position.unsqueeze(-1)
+            causal_mask = (
+                causal_mask.unsqueeze(0) * diagonal_attend_mask
+            )  # (batch_size, seq_len, target_len)
+            causal_mask = causal_mask[
+                :, None, :, :
+            ]  # (batch_size, 1, seq_len, target_len)
             if attention_mask is not None:
                 causal_mask = (
                     causal_mask.clone()
@@ -618,7 +628,6 @@ class SuryaModel(S3DownloaderMixin, PreTrainedModel):
                     :, :, :, :mask_length
                 ].masked_fill(padding_mask, min_dtype)
         return causal_mask
-
 
 class SuryaXLAModel(SuryaModel):
     def get_image_embeddings(

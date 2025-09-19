@@ -247,7 +247,7 @@ class InnerOCRTokenizer:
 class Qwen2Tokenizer(S3DownloaderMixin, Qwen2OriginalTokenizer):
     pass
 
-class GreedyMathUTF16Tokenizer(PreTrainedTokenizer):
+class GreedyMathUTF16Tokenizer(S3DownloaderMixin, PreTrainedTokenizer):
     """
     HuggingFace slow tokenizer implementing:
       - UTF-16 code units as the base [0..65535]
