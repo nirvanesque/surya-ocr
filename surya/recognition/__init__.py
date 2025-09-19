@@ -438,6 +438,7 @@ class RecognitionPredictor(BasePredictor):
             max_lookahead_tokens=self.foundation_predictor.model.config.multi_output_distance,
             max_sliding_window=max_sliding_window,
             max_tokens=max_tokens,
+            tqdm_desc="Recognizing Text"
         )
 
         # Get text and bboxes in structured form

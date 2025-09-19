@@ -53,7 +53,8 @@ class LayoutPredictor(BasePredictor):
                 max_lookahead_tokens=0,  # Do not do MTP for layout
                 top_k=5,
                 max_sliding_window=576,
-                max_tokens=500
+                max_tokens=500,
+                tqdm_desc="Recognizing Layout"
             )
         )
 

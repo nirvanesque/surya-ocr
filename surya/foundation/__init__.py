@@ -723,6 +723,7 @@ class FoundationPredictor(BasePredictor):
         drop_repeated_tokens: bool = True,
         max_lookahead_tokens: Optional[int] = None,
         top_k: int = 0,
+        tqdm_desc: str = "Recognizing Text"
     ) -> tuple:
         allowed_tasks = self.tasks.keys()
         assert all([task_name in allowed_tasks for task_name in task_names]), (
@@ -765,7 +766,7 @@ class FoundationPredictor(BasePredictor):
 
         pbar = tqdm(
             total=len(self.prompt_queue),
-            desc="Recognizing Text",
+            desc=tqdm_desc,
             disable=self.disable_tqdm,
         )
 
