@@ -34,7 +34,7 @@ class DetectionModelLoader(ModelLoader):
         config = EfficientViTConfig.from_pretrained(self.checkpoint)
         model = EfficientViTForSemanticSegmentation.from_pretrained(
             self.checkpoint,
-            torch_dtype=dtype,
+            dtype=dtype,
             config=config,
         )
         model = model.to(device)
