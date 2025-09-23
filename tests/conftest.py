@@ -42,8 +42,8 @@ def recognition_predictor() -> RecognitionPredictor:
 
 
 @pytest.fixture(scope="session")
-def table_rec_predictor(foundation_predictor) -> TableRecPredictor:
-    table_rec_predictor = TableRecPredictor(foundation_predictor)
+def table_rec_predictor() -> TableRecPredictor:
+    table_rec_predictor = TableRecPredictor()
     yield table_rec_predictor
     del table_rec_predictor
 

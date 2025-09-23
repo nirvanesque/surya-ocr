@@ -5,7 +5,6 @@ import json
 from surya.debug.draw import draw_bboxes_on_image
 from tabulate import tabulate
 
-from surya.foundation import FoundationPredictor
 from surya.input.processing import convert_if_not_rgb
 from surya.table_rec import TableRecPredictor
 from surya.settings import settings
@@ -32,8 +31,7 @@ import datasets
 @click.option("--tatr", is_flag=True, help="Run table transformer.", default=False)
 @click.option("--debug", is_flag=True, help="Enable debug mode.", default=False)
 def main(results_dir: str, max_rows: int, tatr: bool, debug: bool):
-    foundation_predictor = FoundationPredictor()
-    table_rec_predictor = TableRecPredictor(foundation_predictor)
+    table_rec_predictor = TableRecPredictor()
 
     pathname = "table_rec_bench"
     # These have already been shuffled randomly, so sampling from the start is fine

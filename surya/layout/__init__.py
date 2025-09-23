@@ -9,11 +9,12 @@ from surya.foundation import FoundationPredictor, TaskNames
 from surya.foundation.util import prediction_to_polygon_batch
 from surya.input.processing import convert_if_not_rgb
 from surya.layout.label import LAYOUT_PRED_RELABEL
+from surya.common.util import clean_boxes
 
 
 class LayoutPredictor(BasePredictor):
     batch_size = settings.LAYOUT_BATCH_SIZE
-    default_batch_sizes = {"cpu": 4, "mps": 4, "cuda": 32, "xla": 16}
+    default_batch_sizes = {"cpu": 4, "mps": 4, "cuda": 12, "xla": 16}
 
     # Override base init - Do not load model
     def __init__(self, foundation_predictor: FoundationPredictor):
@@ -96,7 +97,7 @@ class LayoutPredictor(BasePredictor):
                         confidence=score,
                     )
                 )
-            # layout_boxes = clean_boxes(layout_boxes)
+            layout_boxes = clean_boxes(layout_boxes)
             layout_results.append(
                 LayoutResult(
                     bboxes=layout_boxes,
