@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     COMPILE_DETECTOR: bool = False
 
     # Text recognition
-    FOUNDATION_MODEL_CHECKPOINT: str = "datalab-to/foundation-2.12-6bc20bb-sft-newtok-with-iarchive-1b64s256-multimath-full"
+    FOUNDATION_MODEL_CHECKPOINT: str = "s3://text_recognition/2025_09_23"
     FOUNDATION_MODEL_QUANTIZE: bool = False
     FOUNDATION_MAX_TOKENS: Optional[int] = None
     FOUNDATION_CHUNK_SIZE: Optional[int] = None
