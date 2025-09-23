@@ -28,7 +28,7 @@ import datasets
     default=None,
 )
 def main(results_dir: str, max_rows: int):
-    foundation_predictor = FoundationPredictor()
+    foundation_predictor = FoundationPredictor(checkpoint=settings.LAYOUT_MODEL_CHECKPOINT)
     layout_predictor = LayoutPredictor(foundation_predictor)
     pathname = "order_bench"
     # These have already been shuffled randomly, so sampling from the start is fine

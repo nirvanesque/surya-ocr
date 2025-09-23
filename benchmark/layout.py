@@ -31,7 +31,7 @@ import datasets
 )
 @click.option("--debug", is_flag=True, help="Run in debug mode.", default=False)
 def main(results_dir: str, max_rows: int, debug: bool):
-    foundation_predictor = FoundationPredictor()
+    foundation_predictor = FoundationPredictor(checkpoint=settings.LAYOUT_MODEL_CHECKPOINT)
     layout_predictor = LayoutPredictor(foundation_predictor)
 
     pathname = "layout_bench"

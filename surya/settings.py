@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     COMPILE_DETECTOR: bool = False
 
     # Text recognition
-    FOUNDATION_MODEL_CHECKPOINT: str = "s3://text_recognition/2025_08_29"
+    FOUNDATION_MODEL_CHECKPOINT: str = "datalab-to/foundation-2.12-6bc20bb-sft-newtok-with-iarchive-1b64s256-multimath-full"
     FOUNDATION_MODEL_QUANTIZE: bool = False
     FOUNDATION_MAX_TOKENS: Optional[int] = None
     FOUNDATION_CHUNK_SIZE: Optional[int] = None
@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     COMPILE_FOUNDATION: bool = False
     FOUNDATION_MULTI_TOKEN_MIN_CONFIDENCE: float = 0.9
 
+    RECOGNITION_MODEL_CHECKPOINT: str = "datalab-to/foundation-2.12-6bc20bb-sft-newtok-with-iarchive-1b64s256-multimath-full"
     RECOGNITION_BATCH_SIZE: Optional[int] = (
         None  # Defaults to 8 for CPU/MPS, 256 otherwise
     )
@@ -100,7 +101,7 @@ class Settings(BaseSettings):
     RECOGNITION_PAD_VALUE: int = 255  # Should be 0 or 255
 
     # Layout
-    LAYOUT_MODEL_CHECKPOINT: str = "s3://layout/2025_02_18"
+    LAYOUT_MODEL_CHECKPOINT: str = "datalab-to/foundation-2.12-newtok-bboxcontinue-wsd-0.5ep"
     LAYOUT_IMAGE_SIZE: Dict = {"height": 768, "width": 768}
     LAYOUT_SLICE_MIN: Dict = {
         "height": 1500,

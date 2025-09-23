@@ -67,7 +67,7 @@ class FoundationModelLoader(ModelLoader):
         config.decoder._attn_implementation_autoset = True
 
         model = model_cls.from_pretrained(
-            self.checkpoint, dtype=dtype, config=config
+            self.checkpoint, dtype=dtype, config=config, ignore_mismatched_sizes=True
         ).to(device)
         model = model.eval()
 
